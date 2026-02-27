@@ -1,0 +1,22 @@
+# --- Python & Entrenamiento ---
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+.venv/
+env/
+venv/
+
+# --- Sistema y logs ---
+.DS_Store
+*.log
+nohup.out
+
+# --- Datasets (Archivos pesados) ---
+
+
+# --- Archivos No Deseados ---
+**/classification_maps/
+**/cls_params/
+**/feature/
+**/records/
