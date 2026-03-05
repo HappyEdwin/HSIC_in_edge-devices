@@ -1,0 +1,22 @@
+{
+    "model_name": "yolov4_tiny",
+    "platform": "jetson_orin_nano",
+    "precision": "int8",
+    "activation": "leaky",
+    "mode": "end2end",
+    "input_resolution": "416x416",
+    "params_m": 6.057,
+    "total_ops_giga": 6.9,
+    "gflops": 6.9,
+    "latency_mean_ms": 15.39,
+    "latency_median_ms": 14.89,
+    "latency_p95_ms": 19.23,
+    "latency_std_ms": 2.24,
+    "fps": 64.99,
+    "peak_vram_mb": 6.76,
+    "power_avg_watts": 5.97,
+    "power_max_watts": 6.389,
+    "mAP50": 0.3223,
+    "mAP50_95": 0.2063,
+    "samples_evaluated": 128
+}
