@@ -1,0 +1,22 @@
+{
+    "model_name": "yolo11n",
+    "platform": "jetson_orin_nano",
+    "precision": "fp16",
+    "activation": "silu",
+    "mode": "end2end",
+    "input_resolution": "640x640",
+    "params_m": 2.624,
+    "total_ops_giga": 6.61,
+    "gflops": 6.61,
+    "latency_mean_ms": 30.99,
+    "latency_median_ms": 28.79,
+    "latency_p95_ms": 35.54,
+    "latency_std_ms": 17.75,
+    "fps": 32.27,
+    "peak_vram_mb": 13.24,
+    "power_avg_watts": 6.003,
+    "power_max_watts": 6.309,
+    "mAP50": 0.6758,
+    "mAP50_95": 0.5052,
+    "samples_evaluated": 128
+}
