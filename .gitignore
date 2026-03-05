@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 env/
 venv/
+dla_fix/
 
 # --- Sistema y logs ---
 .DS_Store
@@ -27,3 +28,5 @@ training_runs/
 **/cls_params/
 **/feature/
 **/records/
+.deb
+*.bin

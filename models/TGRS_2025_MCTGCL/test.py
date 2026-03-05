@@ -12,19 +12,21 @@ import time
 from tqdm import tqdm
 
 data_path = os.path.join(os.getcwd(),'')
-dataset = 'PU'
+dataset = 'Indian'
 if dataset == 'PU':
     X = sio.loadmat(os.path.join(data_path, 'data/PaviaU.mat'))['paviaU']
     y = sio.loadmat(os.path.join(data_path, 'data/PaviaU_gt.mat'))['paviaU_gt']
     test_ratio = 0.995
+    num_classes = 9
 elif dataset == 'Indian':
-    X = sio.loadmat(os.path.join(data_path, 'data/Indian.mat'))['Indian']
-    y = sio.loadmat(os.path.join(data_path, 'data/Indian_gt.mat'))['Indian_gt']
+    X = sio.loadmat(os.path.join(data_path, 'data/Indian.mat'))['indian_pines_corrected']
+    y = sio.loadmat(os.path.join(data_path, 'data/Indian_gt.mat'))['indian_pines_gt']
     test_ratio = 0.97
+    num_classes = 16
 else:
     test_ratio = 0.995
+    num_classes = 9
 patch_size = 13
-num_classes = 9
 
 num_tokens = (patch_size - 2) ** 2 # (patch_size - 4) before change
 batch_size = 32
@@ -191,8 +193,13 @@ def AA_andEachClassAccuracy(confusion_matrix):
 
 
 def acc_reports(y_test, y_pred_test):
-    target_names = ['Asphalt','Meadows','Gravel','Trees', 'Painted metal sheets','Bare Soil','Bitumen',
-                        'Self-Blocking Bricks','Shadows']
+    if dataset == 'Indian':
+        target_names = ['Alfalfa', 'Corn-notill', 'Corn-mintill', 'Corn', 'Grass-pasture', 'Grass-trees', 
+        'Grass-pasture-mowed', 'Hay-windrowed', 'Oats', 'Soybean-notill', 'Soybean-mintill', 'Soybean-clean',
+        'Wheat', 'Woods', 'Buildings-Grass-Trees-Drives', 'Stone-Steel-Towers']
+    else:
+        target_names = ['Asphalt','Meadows','Gravel','Trees', 'Painted metal sheets','Bare Soil','Bitumen',
+                            'Self-Blocking Bricks','Shadows']
         
     classification = classification_report(y_test, y_pred_test, digits=4, target_names=target_names)
     oa = accuracy_score(y_test, y_pred_test)
@@ -213,10 +220,11 @@ def save_reports():
     print('{}'.format(classification))
 
 if __name__ == '__main__':
-    train_loader, test_loader, all_data_loader, y_all = create_data_loader(X, y, patch_size) 
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(device)
+    
+    train_loader, test_loader, all_data_loader, y_all = create_data_loader(X, y, patch_size) 
+
     net = mctgcl.mctgcl(num_classes=num_classes, num_tokens=num_tokens).to(device)
     
     if dataset == 'PU':

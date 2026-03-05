@@ -52,7 +52,6 @@ def applyPCA(X, numComponents):
 
     return newX
 
-
 # padding
 def padWithZeros(X, margin=2):
     newX = np.zeros((X.shape[0] + 2 * margin, X.shape[1] + 2 * margin, X.shape[2]))
@@ -68,6 +67,10 @@ def createImageCubes(X, y, windowSize=5, removeZeroLabels = True):
     zeroPaddedX = padWithZeros(X, margin=margin)
     patchesData = np.zeros((X.shape[0] * X.shape[1], windowSize, windowSize, X.shape[2]))
     patchesLabels = np.zeros((X.shape[0] * X.shape[1]))
+    
+    del X
+    #print("Checkpoint 1.1")
+    
     patchIndex = 0
     for r in range(margin, zeroPaddedX.shape[0] - margin):
         for c in range(margin, zeroPaddedX.shape[1] - margin):
@@ -75,6 +78,11 @@ def createImageCubes(X, y, windowSize=5, removeZeroLabels = True):
             patchesData[patchIndex, :, :, :] = patch
             patchesLabels[patchIndex] = y[r-margin, c-margin]
             patchIndex = patchIndex + 1
+        #print(f"patchIndex {patchIndex} of {zeroPaddedX.shape[0] * zeroPaddedX.shape[1]}")
+    
+    del zeroPaddedX, patch
+    #print("Checkpoint 1.2")
+
     if removeZeroLabels:
         patchesData = patchesData[patchesLabels>0,:,:,:]
         patchesLabels = patchesLabels[patchesLabels>0]
