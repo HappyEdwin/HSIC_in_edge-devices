@@ -1,3 +1,5 @@
 timestamp,model_name,platform,precision,input_resolution,params_m,gflops,mAP50,mAP50_95,latency_mean_ms,latency_median_ms,latency_p95_ms,fps,peak_vram_mb,power_avg_watts,unaccelerated_layers
 1790294265,yolo11n,compilation_host,fp16,640x640,2.624,0.0,0.6712,0.5043,0.0,0.0,0.0,0.0,0.0,0.0,0
 1790294319,yolo11n,jetson_orin_nano,fp16,640x640,0.0,0.0,0.0,0.0,6.8,5.06,20.18,147.0,13.24,0.0,0
+1772730015,yolo11n,jetson_orin_nano,fp16,640x640,0.0,0.0,0.0,0.0,17.27,17.94,18.24,57.9,13.24,0.0,0
+1790274994,yolo11n,jetson_orin_nano,fp16,640x640,0.0,0.0,0.6758,0.5052,29.08,28.4,33.97,34.39,13.24,5.513,0
