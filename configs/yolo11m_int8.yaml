@@ -1,0 +1,33 @@
+model:
+  name: "yolo11m"
+  type: "yolo"
+  weights: "models/weights/yolo11m.pt"
+  input_shape: [1, 3, 640, 640]
+  img_size: 640
+  num_classes: 80
+
+dataset:
+  name: "coco128"
+  data_yaml: "coco128.yaml"
+  split: "val"
+
+export:
+  onnx:
+    output_path: "models/onnx/yolo11m_640.onnx"
+    opset: 17
+    simplify: true
+    dynamic_batch: false
+  tensorrt:
+    output_path: "models/engines/yolo11m_640_int8.engine"
+    precision: "INT8"  # FP16, FP32, INT8
+    workspace_gb: 4
+    calib_cache: "models/engines/yolo11m_int8_calib.cache"
+    calib_samples: 128
+
+benchmark:
+  warmup_runs: 50
+  num_runs: 128
+  batch_size: 1
+  save_json: true
+  save_csv: true
+  results_dir: "results"

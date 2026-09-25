@@ -75,11 +75,15 @@ def run_pipeline(config_path: str = "configs/yolo11n.yaml"):
 
     # 4. Compilación a TensorRT Engine
     print(f"\n[PASO 5/5] ⚡ Compilando TensorRT Engine ({precision}):")
+    calib_cache = cfg.get("export", {}).get("tensorrt", {}).get("calib_cache")
     engine_path, trt_report = build_engine(
         onnx_path=onnx_path,
         engine_path=engine_out,
         precision=precision,
-        workspace_gb=workspace_gb
+        workspace_gb=workspace_gb,
+        calib_cache=calib_cache,
+        dataset_yaml=dataset_yaml,
+        img_size=img_size
     )
 
     # Resumen y Almacenamiento

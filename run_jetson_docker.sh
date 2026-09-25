@@ -38,10 +38,37 @@ python3 -c "import ultralytics" 2>/dev/null || {
 python3 -c "import tensorrt; print('TensorRT Version:', tensorrt.__version__)"
 python3 -c "import torch; print('PyTorch CUDA disponible:', torch.cuda.is_available(), '| Dispositivo:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
 
-# 4. Asegurar existencia de modelos
+# 4. Leer configuración del modelo dinámicamente
 CONFIG_FILE="configs/yolo11n.yaml"
-ONNX_MODEL="models/onnx/yolo11n_640.onnx"
-ENGINE_MODEL="models/engines/yolo11n_640_fp16.engine"
+REBUILD_FLAG=""
+
+for arg in "$@"; do
+    if [[ "$arg" == *.yaml ]] || [[ "$arg" == *.yml ]]; then
+        CONFIG_FILE="$arg"
+    elif [[ "$arg" == "--rebuild" ]]; then
+        REBUILD_FLAG="--rebuild"
+    fi
+done
+
+echo "⚙️  Usando archivo de configuración: $CONFIG_FILE"
+
+# Extraer parámetros con Python
+PARSE_CMD="
+import yaml
+with open('$CONFIG_FILE') as f:
+    cfg = yaml.safe_load(f)
+print(cfg['export']['onnx']['output_path'])
+print(cfg['export']['tensorrt']['output_path'])
+print(cfg['export']['tensorrt']['precision'])
+print(cfg['model']['weights'])
+print(cfg['model']['img_size'])
+"
+PARSED_VALUES=($(python3 -c "$PARSE_CMD"))
+ONNX_MODEL="${PARSED_VALUES[0]}"
+ENGINE_MODEL="${PARSED_VALUES[1]}"
+PRECISION="${PARSED_VALUES[2]}"
+WEIGHTS_PATH="${PARSED_VALUES[3]}"
+IMG_SIZE="${PARSED_VALUES[4]:-640}"
 
 mkdir -p models/onnx models/engines models/weights results
 
@@ -49,25 +76,24 @@ mkdir -p models/onnx models/engines models/weights results
 if [ ! -f "$ONNX_MODEL" ]; then
     echo ""
     echo "⚙️  ONNX no encontrado en $ONNX_MODEL. Generando..."
-    python3 src/compilation/export_onnx.py --weights models/weights/yolo11n.pt --output "$ONNX_MODEL" --imgsz 640 --opset 17
+    python3 src/compilation/export_onnx.py --weights "$WEIGHTS_PATH" --output "$ONNX_MODEL" --imgsz "$IMG_SIZE" --opset 17
 fi
 
 # 5. Compilación del TensorRT Engine nativo para Orin Nano
-# (Los engines son dependientes de la arquitectura SM 8.7 de Orin Nano)
-if [ ! -f "$ENGINE_MODEL" ] || [ "$1" == "--rebuild" ]; then
+if [ ! -f "$ENGINE_MODEL" ] || [ "$REBUILD_FLAG" == "--rebuild" ]; then
     echo ""
     echo "========================================================="
-    echo "🔨 COMPILANDO TENSORRT ENGINE NATIVO PARA JETSON (FP16)"
+    echo "🔨 COMPILANDO TENSORRT ENGINE NATIVO PARA JETSON ($PRECISION)"
     echo "========================================================="
     python3 src/compilation/build_tensorrt.py \
         --onnx "$ONNX_MODEL" \
         --output "$ENGINE_MODEL" \
-        --precision FP16 \
+        --precision "$PRECISION" \
         --workspace 4
 else
     echo ""
     echo "ℹ️  Engine TensorRT ya existente en: $ENGINE_MODEL"
-    echo "    (Para forzar recompilación, ejecuta: ./run_jetson_docker.sh --rebuild)"
+    echo "    (Para forzar recompilación, ejecuta con --rebuild)"
 fi
 
 # 6. Inferencia y Benchmarking End-to-End con telemetría

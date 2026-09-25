@@ -8,7 +8,7 @@ set -e
 DEFAULT_IMAGE="dustynv/l4t-pytorch:r36.4.0"
 CONTAINER_IMAGE="${DOCKER_IMAGE:-$DEFAULT_IMAGE}"
 
-if [ -n "$1" ] && [[ "$1" != --* ]]; then
+if [ -n "$1" ] && [[ "$1" != --* ]] && [[ "$1" != *.yaml ]] && [[ "$1" != *.yml ]]; then
     CONTAINER_IMAGE="$1"
     shift
 fi
