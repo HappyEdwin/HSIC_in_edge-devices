@@ -142,12 +142,40 @@ def benchmark_jetson(
     except Exception as e:
         print(f"⚠️  No se pudo calcular mAP completo en el engine: {e}")
 
-    # 7. Guardar resultados
+    # 7. Obtener complejidad del modelo (lookup o cálculo)
+    MODEL_SPECS = {
+        "yolo11n": {"params_m": 2.624, "gflops": 6.61},
+        "yolo11s": {"params_m": 9.43, "gflops": 21.5},
+        "yolo11m": {"params_m": 20.09, "gflops": 68.0},
+        "yolo11l": {"params_m": 25.3, "gflops": 86.9},
+        "yolo11x": {"params_m": 56.9, "gflops": 194.9},
+        "yolov8n": {"params_m": 3.16, "gflops": 8.7},
+        "yolov8s": {"params_m": 11.17, "gflops": 28.6},
+        "yolov8m": {"params_m": 25.86, "gflops": 78.9},
+    }
+    params_m = cfg.get("model", {}).get("params_m", 0.0)
+    gflops = cfg.get("model", {}).get("gflops", 0.0)
+    weights_path = cfg.get("model", {}).get("weights", "")
+    if (params_m == 0.0 or gflops == 0.0) and weights_path and os.path.exists(weights_path):
+        try:
+            pt_m = YOLO(weights_path)
+            params_m = round(count_parameters(pt_m) / 1e6, 3)
+            gflops = round(estimate_flops(pt_m, input_size=(1, 3, img_size, img_size)), 3)
+        except Exception:
+            pass
+    if params_m == 0.0 and model_name in MODEL_SPECS:
+        params_m = MODEL_SPECS[model_name]["params_m"]
+    if gflops == 0.0 and model_name in MODEL_SPECS:
+        gflops = MODEL_SPECS[model_name]["gflops"]
+
+    # 8. Guardar resultados
     result_data = {
         "model_name": model_name,
         "platform": "jetson_orin_nano",
         "precision": precision,
         "input_resolution": f"{img_size}x{img_size}",
+        "params_m": params_m,
+        "gflops": gflops,
         "latency_mean_ms": round(lat_mean, 2),
         "latency_median_ms": round(lat_median, 2),
         "latency_p95_ms": round(lat_p95, 2),
