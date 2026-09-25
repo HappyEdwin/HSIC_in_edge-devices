@@ -21,5 +21,11 @@ source env/bin/activate
 # Como es arquitectura ARM hay que tener cuidado al instalar librerias
 # Lo mejor es instalar las librerias optimizadas del jetpack
 
-# Para pagar el dispositivo
+# --- Ejecución en Docker (NVIDIA Jetson) ---
+# Ejecutar benchmark dentro del contenedor:
+./launch_jetson_docker.sh
+# O si ya estás dentro del contenedor:
+./run_jetson_docker.sh
+
+# Para apagar el dispositivo
 sudo poweroff
