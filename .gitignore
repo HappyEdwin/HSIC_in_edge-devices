@@ -13,7 +13,14 @@ venv/
 nohup.out
 
 # --- Datasets (Archivos pesados) ---
+datasets/
+coco128/
+coco128.zip
 
+# --- Modelos Binarios & Compilados ---
+models/weights/*.pt
+models/engines/*.engine
+training_runs/
 
 # --- Archivos No Deseados ---
 **/classification_maps/

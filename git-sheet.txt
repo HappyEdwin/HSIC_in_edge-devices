@@ -1,0 +1,25 @@
+# 1. Ver qué archivos han cambiado
+git status
+
+# 2. Preparar los archivos para el commit
+git add .
+
+# 3. Guardar los cambios localmente con un mensaje descriptivo
+git commit -m "Descripción de la mejora o cambio"
+
+# 4. Subir los cambios a GitHub (usando la rama main)
+git push origin main
+
+# Descargar e integrar los cambios desde GitHub
+git pull origin main
+
+# Crear y activar un entorno virtual
+python3 -m venv env
+source env/bin/activate
+
+# Instalar dependencias 
+# Como es arquitectura ARM hay que tener cuidado al instalar librerias
+# Lo mejor es instalar las librerias optimizadas del jetpack
+
+# Para pagar el dispositivo
+sudo poweroff

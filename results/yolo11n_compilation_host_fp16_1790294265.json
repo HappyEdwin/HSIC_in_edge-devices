@@ -1,0 +1,17 @@
+{
+    "model_name": "yolo11n",
+    "platform": "compilation_host",
+    "precision": "fp16",
+    "input_resolution": "640x640",
+    "params_m": 2.624,
+    "gflops": 0.0,
+    "mAP50": 0.6712,
+    "mAP50_95": 0.5043,
+    "engine_size_mb": 7.48,
+    "unaccelerated_layers_count": 0,
+    "unaccelerated_warnings": [],
+    "latency_mean_ms": 0.0,
+    "fps": 0.0,
+    "peak_vram_mb": 0.0,
+    "power_avg_watts": 0.0
+}
