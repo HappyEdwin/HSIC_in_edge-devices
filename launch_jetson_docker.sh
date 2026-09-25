@@ -18,12 +18,17 @@ echo "🐳 LANZANDO CONTENEDOR DOCKER EN JETSON ORIN NANO"
 echo "========================================================="
 echo "Imagen objetivo: $CONTAINER_IMAGE"
 echo "Montando workspace: $(pwd) -> /workspace"
-echo ""
+EXTRA_MOUNTS=""
+if [ -f "/usr/bin/tegrastats" ]; then
+    EXTRA_MOUNTS="-v /usr/bin/tegrastats:/usr/bin/tegrastats:ro"
+fi
 
-docker run --runtime nvidia --gpus all -it --rm \
+docker run --runtime nvidia --gpus all --privileged -it --rm \
     --network host \
     --ipc=host \
-    -v /sys/devices:/sys/devices:ro \
+    -v /sys:/sys:ro \
+    -v /dev:/dev \
+    $EXTRA_MOUNTS \
     -v /tmp/argus_socket:/tmp/argus_socket \
     -v "$(pwd)":/workspace \
     -w /workspace \

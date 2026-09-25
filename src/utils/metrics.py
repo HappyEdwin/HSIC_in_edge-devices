@@ -52,9 +52,11 @@ class JetsonPowerMonitor:
         self.worker_thread: Optional[threading.Thread] = None
 
     def _reader(self):
+        import shutil
+        tegrastats_cmd = shutil.which("tegrastats") or "/usr/bin/tegrastats"
         try:
             self.process = subprocess.Popen(
-                ["tegrastats", "--interval", str(self.interval_ms)],
+                [tegrastats_cmd, "--interval", str(self.interval_ms)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True
@@ -63,19 +65,21 @@ class JetsonPowerMonitor:
                 line = self.process.stdout.readline()
                 if not line:
                     break
-                # Parsear VDD_IN o POM_5V_IN o VDD_GPU según modelo Jetson
-                # Formato típico Orin: VDD_IN 4500mW/4500mW o similar
                 import re
-                match = re.search(r'VDD_IN\s+(\d+)mW', line) or re.search(r'POM_5V_IN\s+(\d+)mW', line)
+                # En Jetson Orin: VDD_IN 4500mW/4500mW o VIN_SYS_5V0 4500mW o similar
+                match = re.search(r'(?:VDD_IN|POM_5V_IN|VIN_SYS_5V0|VDD_CPU_GPU_CV)\s+(\d+)mW', line) or re.search(r'\b(\d+)mW/\d+mW', line)
                 if match:
-                    self.power_readings.append(float(match.group(1)) / 1000.0) # Watts
+                    # Si el grupo 1 capturó el número o el match
+                    val = match.group(1) if match.lastindex >= 1 else match.group(0).split('mW')[0]
+                    self.power_readings.append(float(val) / 1000.0) # Watts
         except Exception:
             pass
 
     def start(self):
+        import shutil
         self.power_readings = []
         self.stop_event.clear()
-        if os.path.exists("/usr/bin/tegrastats"):
+        if shutil.which("tegrastats") or os.path.exists("/usr/bin/tegrastats"):
             self.worker_thread = threading.Thread(target=self._reader, daemon=True)
             self.worker_thread.start()
 
