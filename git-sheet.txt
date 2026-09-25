@@ -21,11 +21,30 @@ source env/bin/activate
 # Como es arquitectura ARM hay que tener cuidado al instalar librerias
 # Lo mejor es instalar las librerias optimizadas del jetpack
 
+# --- Configuración Pre-Benchmark (NVIDIA Jetson) ---
+# 1. Sincronizar fecha y hora (evita errores SSL)
+timedatectl status
+sudo timedatectl set-ntp true
+sudo date -s "2026-09-24 20:30:00"
+sudo hwclock --systohc
+
+# 2. Poner hardware a máxima velocidad y bloquear clocks
+sudo nvpmodel -m 2
+sudo jetson_clocks
+sudo jetson_clocks --show
+
 # --- Ejecución en Docker (NVIDIA Jetson) ---
-# Ejecutar benchmark dentro del contenedor:
+# 1. Asegúrate de tener los últimos scripts del repositorio
+git pull origin main
+
+# 2. Dar permisos de ejecución a los scripts
+chmod +x launch_jetson_docker.sh run_jetson_docker.sh
+
+# 3. Lanzar el benchmark (usa por defecto dustynv/l4t-pytorch:r36.4.0)
 ./launch_jetson_docker.sh
-# O si ya estás dentro del contenedor:
-./run_jetson_docker.sh
+
+# 4. Volver clocks a la normalidad:
+sudo jetson_clocks --restore
 
 # Para apagar el dispositivo
 sudo poweroff
