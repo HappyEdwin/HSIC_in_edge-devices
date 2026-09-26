@@ -1,0 +1,9 @@
+FROM xilinx/vitis-ai-pytorch-cpu:latest
+
+USER root
+# Install ninja and ultralytics with numpy pinned to 1.22.0 to preserve pytorch-nndct stability
+RUN /opt/vitis_ai/conda/envs/vitis-ai-pytorch/bin/pip install --no-cache-dir ninja "numpy==1.24.2" && \
+    /opt/vitis_ai/conda/envs/vitis-ai-pytorch/bin/pip install --no-cache-dir "ultralytics>=8.3.0" "numpy==1.24.2"
+
+USER vitis-ai-user
+WORKDIR /workspace

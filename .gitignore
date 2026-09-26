@@ -21,6 +21,7 @@ coco128.zip
 # --- Modelos Binarios & Compilados ---
 models/weights/*.pt
 models/engines/*.engine
+models/vitis_ai/
 training_runs/
 
 # --- Archivos No Deseados ---

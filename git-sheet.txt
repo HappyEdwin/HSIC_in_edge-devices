@@ -48,3 +48,21 @@ sudo jetson_clocks --restore
 
 # Para apagar el dispositivo
 sudo poweroff
+
+# --- Ejecución en AMD-Xilinx Kria KV260 ---
+# 1. Conectarse a la KV260 vía SSH desde Windows (PowerShell/CMD):
+# ssh ubuntu@<IP_KRIA>
+
+# 2. Descargar los últimos cambios del repositorio
+git pull origin main
+
+# 3. Cargar el firmware/overlay del DPU en la FPGA (si no está cargado):
+sudo xmutil listapps
+sudo xmutil unloadapp
+sudo xmutil loadapp kv260-smartcam
+
+# 4. Verificar que el DPU está activo en hardware:
+xdputil query
+
+# 5. Ejecutar la inferencia con VART:
+python3 src/inference/benchmark_kv260.py --model models/xmodel/yolo11m_kv260.xmodel --iterations 100
