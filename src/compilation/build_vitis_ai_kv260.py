@@ -51,6 +51,48 @@ class DpuC2f(torch.nn.Module):
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
 
+class DpuC2PSA(torch.nn.Module):
+    """
+    Bit-exact, DPU-native replacement for Ultralytics C2PSA block (layer 10 in YOLOv11).
+    Replaces self.cv1.split with two parallel 1x1 convolutions (cv1_a and cv1_b)
+    to completely eliminate unsupported strided_slice operations on Xilinx DPU.
+    """
+    def __init__(self, c2psa):
+        super().__init__()
+        c = c2psa.c
+        self.c = c
+        self.cv1_a = copy.deepcopy(c2psa.cv1)
+        self.cv1_b = copy.deepcopy(c2psa.cv1)
+        self.cv1_a.conv.out_channels = c
+        self.cv1_b.conv.out_channels = c
+        self.cv1_a.conv.weight = torch.nn.Parameter(c2psa.cv1.conv.weight[:c].clone())
+        self.cv1_b.conv.weight = torch.nn.Parameter(c2psa.cv1.conv.weight[c:].clone())
+        if c2psa.cv1.conv.bias is not None:
+            self.cv1_a.conv.bias = torch.nn.Parameter(c2psa.cv1.conv.bias[:c].clone())
+            self.cv1_b.conv.bias = torch.nn.Parameter(c2psa.cv1.conv.bias[c:].clone())
+            
+        if hasattr(c2psa.cv1, "bn") and c2psa.cv1.bn is not None:
+            self.cv1_a.bn.num_features = c
+            self.cv1_b.bn.num_features = c
+            for attr in ["weight", "bias", "running_mean", "running_var"]:
+                val = getattr(c2psa.cv1.bn, attr)
+                if val is not None:
+                    if "running" in attr:
+                        setattr(self.cv1_a.bn, attr, val[:c].clone())
+                        setattr(self.cv1_b.bn, attr, val[c:].clone())
+                    else:
+                        setattr(self.cv1_a.bn, attr, torch.nn.Parameter(val[:c].clone()))
+                        setattr(self.cv1_b.bn, attr, torch.nn.Parameter(val[c:].clone()))
+        
+        self.m = c2psa.m
+        self.cv2 = c2psa.cv2
+
+    def forward(self, x):
+        a = self.cv1_a(x)
+        b = self.cv1_b(x)
+        b = self.m(b)
+        return self.cv2(torch.cat((a, b), 1))
+
 def raw_detect_forward(self, x):
     """
     Returns raw multi-scale feature maps across all detection scales.
@@ -104,7 +146,7 @@ def quantize_and_compile(
     calib_dir: str = "/home/edwinacevedo/VIP/datasets/coco128/images/train2017",
     output_dir: str = "models/xmodel",
     model_name: str = "yolo11m_kv260",
-    arch_json: str = "/opt/vitis_ai/compiler/arch/DPUCZDX8G/KV260/arch.json",
+    arch_json: str = "models/vitis_ai/arch_kv260_b3136.json",
     num_calib_samples: int = 64,
     img_size: int = 640,
 ):
@@ -116,10 +158,17 @@ def quantize_and_compile(
     print(f"   Output Directory: {output_dir}")
     print("=" * 75)
 
-    target_dpu = "DPUCZDX8G_ISA1_B4096"
+    # Hardware target matching KV260 smartcam DPU (B3136, fingerprint 0x101000016010406)
+    target_dpu = "DPUCZDX8G_ISA1_B3136"
     temp_quant_dir = "models/vitis_ai/quantize_result_yolo11m"
     os.makedirs(temp_quant_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(arch_json), exist_ok=True)
+
+    # Write exact board fingerprint arch.json
+    with open(arch_json, "w") as f:
+        f.write('{\n  "fingerprint": "0x101000016010406"\n}\n')
+    print(f"✅ Created hardware arch.json matching Kria KV260: {arch_json}")
 
     dummy_input = torch.randn(1, 3, img_size, img_size)
 
@@ -138,6 +187,13 @@ def quantize_and_compile(
             dpu_layer.type = getattr(layer, "type", layer.__class__.__name__)
             model.model[i] = dpu_layer
             transformed_c2f += 1
+        elif layer.__class__.__name__ == "C2PSA":
+            dpu_layer = DpuC2PSA(layer)
+            dpu_layer.i = getattr(layer, "i", i)
+            dpu_layer.f = getattr(layer, "f", -1)
+            dpu_layer.type = getattr(layer, "type", layer.__class__.__name__)
+            model.model[i] = dpu_layer
+            print(f"✅ Transformed layer {i} C2PSA block into DPU-native parallel convolutions.")
     print(f"✅ Transformed {transformed_c2f} C3k2/C2f blocks into DPU-native parallel convolutions.")
 
     disabled_inplace = 0
