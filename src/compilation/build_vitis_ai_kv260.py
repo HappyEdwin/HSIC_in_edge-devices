@@ -149,10 +149,12 @@ def quantize_and_compile(
     arch_json: str = "models/vitis_ai/arch_kv260_b3136.json",
     num_calib_samples: int = 64,
     img_size: int = 640,
+    activation: str = "silu",
 ):
     print("=" * 75)
     print(f"🚀 Vitis AI INT8 Quantization & Compilation for Kria KV260")
     print(f"   Model: {weights_path}")
+    print(f"   Activation Target: {activation.upper()}")
     print(f"   Calibration dataset: {calib_dir}")
     print(f"   Target Architecture: {arch_json}")
     print(f"   Output Directory: {output_dir}")
@@ -160,7 +162,7 @@ def quantize_and_compile(
 
     # Hardware target matching KV260 smartcam DPU (B3136, fingerprint 0x101000016010406)
     target_dpu = "DPUCZDX8G_ISA1_B3136"
-    temp_quant_dir = "models/vitis_ai/quantize_result_yolo11m"
+    temp_quant_dir = f"models/vitis_ai/quantize_result_{model_name}"
     os.makedirs(temp_quant_dir, exist_ok=True)
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.dirname(arch_json), exist_ok=True)
@@ -177,6 +179,17 @@ def quantize_and_compile(
     yolo = YOLO(weights_path)
     model = yolo.model
     model.eval()
+
+    # If activation is leaky, replace SiLU with LeakyReLU(0.1) for hardware DPU fusion
+    if activation.lower() == "leaky":
+        replaced_act = 0
+        for name, m in model.named_modules():
+            if hasattr(m, "act") and isinstance(m.act, torch.nn.SiLU):
+                m.act = torch.nn.LeakyReLU(0.1, inplace=False)
+                replaced_act += 1
+            elif isinstance(m, torch.nn.SiLU):
+                pass
+        print(f"✅ Replaced {replaced_act} SiLU activations with DPU-native LeakyReLU(0.1) for kernel fusion.")
 
     transformed_c2f = 0
     for i, layer in enumerate(model.model):
@@ -216,6 +229,7 @@ def quantize_and_compile(
             print("✅ Patched C2PSA Attention module to CNN mode (pe + proj).")
 
     # 2. Calibration Mode ('calib')
+
     print(f"\n[2/4] 🎯 Running INT8 Calibration with {num_calib_samples} COCO images...")
     calib_tensors = get_calib_dataset(calib_dir, num_samples=num_calib_samples, img_size=img_size)
 
@@ -298,6 +312,7 @@ if __name__ == "__main__":
     parser.add_argument("--calib-dir", type=str, default="/home/edwinacevedo/VIP/datasets/coco128/images/train2017")
     parser.add_argument("--output-dir", type=str, default="models/xmodel")
     parser.add_argument("--name", type=str, default="yolo11m_kv260")
+    parser.add_argument("--activation", type=str, default="silu", choices=["silu", "leaky"], help="Activation function: silu (unfused) or leaky (DPU-fused)")
     parser.add_argument("--samples", type=int, default=64)
     args = parser.parse_args()
 
@@ -306,5 +321,6 @@ if __name__ == "__main__":
         calib_dir=args.calib_dir,
         output_dir=args.output_dir,
         model_name=args.name,
-        num_calib_samples=args.samples
+        num_calib_samples=args.samples,
+        activation=args.activation
     )
