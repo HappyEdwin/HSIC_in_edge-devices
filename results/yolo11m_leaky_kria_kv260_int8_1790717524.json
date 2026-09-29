@@ -1,0 +1,22 @@
+{
+    "model_name": "yolo11m_leaky",
+    "platform": "kria_kv260",
+    "precision": "int8",
+    "mode": "hardware",
+    "input_resolution": "640x640",
+    "params_m": 20.09,
+    "gflops": 68.0,
+    "latency_mean_ms": 107.12,
+    "latency_median_ms": 107.11,
+    "latency_p95_ms": 107.78,
+    "latency_min_ms": 106.55,
+    "latency_max_ms": 107.96,
+    "fps": 9.34,
+    "peak_vram_mb": 108.34,
+    "power_avg_watts": 7.791,
+    "power_max_watts": 9.69,
+    "mAP50": 0.72,
+    "mAP50_95": 0.558,
+    "samples_evaluated": 100,
+    "unaccelerated_layers": 0
+}
