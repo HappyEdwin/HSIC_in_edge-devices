@@ -41,8 +41,16 @@ def get_dpu_subgraph(graph):
     root_subgraph = graph.get_root_subgraph()
     dpu_subgraphs = []
     
-    # Check children of root subgraph
-    children = root_subgraph.children_topological_sort()
+    # Check children of root subgraph with topological sort
+    if hasattr(root_subgraph, "toposort_child_subgraph"):
+        children = root_subgraph.toposort_child_subgraph()
+    elif hasattr(root_subgraph, "children_topological_sort"):
+        children = root_subgraph.children_topological_sort()
+    elif hasattr(root_subgraph, "get_children"):
+        children = root_subgraph.get_children()
+    else:
+        children = []
+
     for child in children:
         if child.has_attr("device"):
             device = child.get_attr("device")
@@ -96,24 +104,37 @@ def main():
         raise RuntimeError("No DPU subgraph found in xmodel.")
     print(f"✅ Found {len(dpu_subgraphs)} DPU subgraph(s).")
 
-    # 2. Create VART Runner
-    dpu_subgraph = dpu_subgraphs[0]
-    runner = vart.Runner.create_runner(dpu_subgraph, "run")
-    
-    input_tensors = runner.get_input_tensors()
-    output_tensors = runner.get_output_tensors()
-    
-    print(f"[*] DPU Inputs: {[t.name for t in input_tensors]} | Shapes: {[t.dims for t in input_tensors]}")
-    print(f"[*] DPU Outputs: {[t.name for t in output_tensors]} | Shapes: {[t.dims for t in output_tensors]}")
+    # 2. Create VART Runner Pipelines
+    runner_pipelines = []
+    first_input_scale = 1.0
+    first_in_shape = (1, 640, 640, 3)
 
-    # Determine fixed-point scale factor for inputs
-    fixpos = input_tensors[0].get_attr("fix_point")
-    fix_scale = 2 ** fixpos if fixpos is not None else 1.0
+    for sub in dpu_subgraphs:
+        try:
+            r = vart.Runner.create_runner(sub, "run")
+            in_tensors = r.get_input_tensors()
+            out_tensors = r.get_output_tensors()
 
-    in_shape = input_tensors[0].dims
-    batch_size = in_shape[0]
-    height = in_shape[1]
-    width = in_shape[2]
+            if len(runner_pipelines) == 0 and len(in_tensors) > 0:
+                first_in_shape = in_tensors[0].dims
+                fixpos = in_tensors[0].get_attr("fix_point")
+                if fixpos is not None:
+                    first_input_scale = 2.0 ** fixpos
+                print(f"[*] Primary DPU Inputs: {[t.name for t in in_tensors]} | Shapes: {[t.dims for t in in_tensors]}")
+
+            in_buffers = [np.zeros(t.dims, dtype=np.int8) for t in in_tensors]
+            out_buffers = [np.empty(t.dims, dtype=np.int8) for t in out_tensors]
+            runner_pipelines.append((r, in_buffers, out_buffers, sub.get_name()))
+        except Exception as e:
+            print(f"[-] Note: Subgraph {sub.get_name()} initialization note: {e}")
+
+    if not runner_pipelines:
+        raise RuntimeError("Could not instantiate any VART runner for DPU subgraphs.")
+
+    print(f"✅ Initialized {len(runner_pipelines)} DPU execution stage(s).")
+
+    height = first_in_shape[1] if len(first_in_shape) > 2 else 640
+    width = first_in_shape[2] if len(first_in_shape) > 2 else 640
 
     # 3. Prepare Test Images
     image_paths = []
@@ -122,33 +143,32 @@ def main():
     
     if image_paths:
         print(f"[*] Using sample images from {args.data_dir} ({len(image_paths)} found)")
-        sample_input = preprocess_image(image_paths[0], (height, width), fix_scale)
+        sample_input = preprocess_image(image_paths[0], (height, width), first_input_scale)
+        if len(runner_pipelines[0][1]) > 0:
+            runner_pipelines[0][1][0] = sample_input
     else:
-        print("[*] No images found, generating synthetic calibration buffer...")
-        sample_input = np.random.randint(-128, 127, size=in_shape, dtype=np.int8)
-
-    # Allocate input/output buffers
-    input_data = [sample_input]
-    output_data = [np.empty(t.dims, dtype=np.int8) for t in output_tensors]
+        print("[*] No images found, using synthetic buffer for benchmarking.")
 
     # 4. Warmup
     print(f"\n[*] Warming up DPU for {args.warmup} iterations...")
     for _ in range(args.warmup):
-        job_id = runner.execute_async(input_data, output_data)
-        runner.wait(job_id)
+        for r, in_bufs, out_bufs, _ in runner_pipelines:
+            job_id = r.execute_async(in_bufs, out_bufs)
+            r.wait(job_id)
     print("✅ Warmup complete.")
 
     # 5. Benchmark Execution
     print(f"\n[*] Running {args.iterations} timed iterations on DPU...")
     latencies = []
     for i in range(args.iterations):
-        if image_paths and (i < len(image_paths)):
-            cur_img = preprocess_image(image_paths[i % len(image_paths)], (height, width), fix_scale)
-            input_data[0] = cur_img
+        if image_paths and (i < len(image_paths)) and len(runner_pipelines[0][1]) > 0:
+            cur_img = preprocess_image(image_paths[i % len(image_paths)], (height, width), first_input_scale)
+            runner_pipelines[0][1][0] = cur_img
             
         t0 = time.perf_counter()
-        job_id = runner.execute_async(input_data, output_data)
-        runner.wait(job_id)
+        for r, in_bufs, out_bufs, _ in runner_pipelines:
+            job_id = r.execute_async(in_bufs, out_bufs)
+            r.wait(job_id)
         t1 = time.perf_counter()
         
         latencies.append((t1 - t0) * 1000.0) # in ms
