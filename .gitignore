@@ -14,9 +14,11 @@ dla_fix/
 nohup.out
 
 # --- Datasets (Archivos pesados) ---
-datasets/
-coco128/
+/datasets/
+/coco128/
 coco128.zip
+data/coco128/images/
+!data/coco128/labels/
 
 # --- Modelos Binarios & Compilados ---
 models/weights/*.pt
