@@ -2,11 +2,13 @@
 """
 Benchmark Runner & Hardware Telemetry for Hyperspectral Classification (SS-ResNet)
 on NVIDIA Jetson Orin Nano (TensorRT FP16 / INT8).
-Dependencies: ONLY standard library + NumPy + TensorRT / PyTorch (No scipy, no sklearn needed).
+- PCA Preprocessing: Performed 100% ON-BOARD from raw 200-band HSI cube.
+- Dependencies: ONLY Standard Library + NumPy + TensorRT / PyTorch (No scipy, no sklearn).
 Evaluates:
-  1. Pure TensorRT GPU Latency & Throughput (patches/sec)
-  2. Full Scene Classification Time & Accuracy (OA, AA, Cohen's Kappa)
-  3. Power (W) via Jetson sysfs / tegrastats & Energy per Patch / Scene (mJ)
+  1. On-Board Preprocessing Latency (PCA 200 -> 30 bands + Patch Extraction)
+  2. Pure TensorRT GPU Latency & Throughput (patches/sec)
+  3. Full Scene Classification Time & Accuracy (OA, AA, Cohen's Kappa)
+  4. Real-time Power (W) via Jetson sysfs / tegrastats & Energy per Scene (J)
 """
 
 import os
@@ -62,7 +64,6 @@ class TRTHSIRunner:
                     self.output_tensor = t
 
     def infer(self, patch_np: np.ndarray) -> np.ndarray:
-        # patch_np: (1, 30, 13, 13)
         t_patch = torch.from_numpy(patch_np).float().to(self.device)
         self.input_tensor.copy_(t_patch)
         if hasattr(self.context, "execute_async_v3"):
@@ -71,6 +72,28 @@ class TRTHSIRunner:
             self.context.execute_v2(self.bindings)
         torch.cuda.synchronize()
         return self.output_tensor.cpu().numpy()
+
+def apply_pca_on_board(raw_data, weights_path="data/hsi/pca_transform_weights.npy", mean_path="data/hsi/pca_mean.npy", mode="project"):
+    h, w, b = raw_data.shape
+    flat_X = np.reshape(raw_data, (-1, b)).astype(np.float32)
+
+    t0 = time.perf_counter()
+    if mode == "project" and os.path.exists(weights_path) and os.path.exists(mean_path):
+        W = np.load(weights_path)
+        mu = np.load(mean_path)
+        pca_flat = (flat_X - mu) @ W
+    else:
+        mean = np.mean(flat_X, axis=0)
+        X_c = flat_X - mean
+        cov = np.cov(X_c, rowvar=False)
+        evals, evecs = np.linalg.eigh(cov)
+        idx = np.argsort(evals)[::-1][:30]
+        evals, evecs = evals[idx], evecs[:, idx]
+        pca_flat = (X_c @ evecs) / np.sqrt(evals)
+
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    pca_data = np.reshape(pca_flat, (h, w, 30)).astype(np.float32)
+    return pca_data, elapsed_ms
 
 def pad_with_zeros(X, margin=2):
     padded = np.zeros((X.shape[0] + 2 * margin, X.shape[1] + 2 * margin, X.shape[2]), dtype=X.dtype)
@@ -123,10 +146,11 @@ def compute_metrics_numpy(y_true, y_pred, num_classes=16):
     return oa, aa, kappa, cm
 
 def main():
-    parser = argparse.ArgumentParser(description="Jetson HSI SS-ResNet Benchmark")
+    parser = argparse.ArgumentParser(description="Jetson HSI SS-ResNet Benchmark with On-Board PCA")
     parser.add_argument("--engine", type=str, default="models/engines/ss_resnet_indian_b1_int8.engine", help="Path to TensorRT engine")
     parser.add_argument("--precision", type=str, default="INT8", choices=["FP16", "INT8"])
     parser.add_argument("--dataset", type=str, default="Indian", choices=["Indian", "Pavia"])
+    parser.add_argument("--pca_mode", type=str, default="project", choices=["project", "fit"], help="PCA execution mode on board")
     parser.add_argument("--iterations", type=int, default=1000, help="Latency benchmark iterations")
     parser.add_argument("--eval_full", action="store_true", default=True, help="Evaluate full test set accuracy")
     parser.add_argument("--output_json", type=str, default="results/hsi/benchmark_jetson.json")
@@ -140,30 +164,39 @@ def main():
     print("=" * 75)
     print(f"🚀 NVIDIA Jetson Orin Nano Hyperspectral Benchmark (SS-ResNet)")
     print(f"   Engine: {engine_path} | Precision: {args.precision}")
-    print(f"   Dataset: {args.dataset} Pines | Dependencies: Pure NumPy")
+    print(f"   Dataset: {args.dataset} Pines | On-Board PCA: {args.pca_mode.upper()}")
     print("=" * 75)
 
-    # 1. Load Data
-    pca_file = "data/hsi/indian_pines_pca30.npy"
+    # 1. Load Raw Hyperspectral Cube
+    raw_file = "data/hsi/raw_indian_pines.npy"
     gt_file = "data/hsi/indian_pines_gt.npy"
     idx_file = "data/hsi/indian_test_indices.npy"
 
-    if os.path.exists(pca_file) and os.path.exists(gt_file):
-        print(f"[*] Loading preprocessed NumPy cubes from {pca_file}...")
-        pca_data = np.load(pca_file)
+    if os.path.exists(raw_file) and os.path.exists(gt_file):
+        print(f"[*] Loading raw HSI sensor cube from {raw_file}...")
+        raw_data = np.load(raw_file)
         gt = np.load(gt_file)
     else:
         import scipy.io as sio
-        print(f"[*] Loading raw .mat files via scipy...")
-        pca_data = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian.mat")['indian_pines_corrected']
-        gt = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian_gt.mat")['indian_pines_gt']
+        print(f"[*] Loading raw .mat files...")
+        raw_data = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian.mat")['indian_pines_corrected'].astype(np.float32)
+        gt = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian_gt.mat")['indian_pines_gt'].astype(np.int64)
 
     num_classes = int(np.max(gt))
-    print(f"[*] HSI Scene: {pca_data.shape}, Ground Truth: {gt.shape}, Classes: {num_classes}")
+    print(f"[*] Raw Sensor Cube: {raw_data.shape} ({raw_data.shape[2]} spectral bands)")
+    print(f"[*] Ground Truth Mask: {gt.shape} ({num_classes} classes)")
 
+    # 2. Execute PCA on the Board
+    print(f"\n[*] Executing On-Board PCA Reduction ({raw_data.shape[2]} -> 30 bands)...")
+    pca_data, t_pca_ms = apply_pca_on_board(raw_data, mode=args.pca_mode)
+    print(f"✅ On-Board PCA Preprocessing Completed in: {t_pca_ms:.2f} ms! Reduced shape: {pca_data.shape}")
+
+    # 3. Patch Extraction
+    t0_patch = time.perf_counter()
     X_cubes, y_labels = create_image_cubes(pca_data, gt, window_size=13)
-    # Transpose to (N, 30, 13, 13) for PyTorch / TensorRT NCHW format
-    X_cubes = np.transpose(X_cubes, (0, 3, 1, 2))
+    X_cubes = np.transpose(X_cubes, (0, 3, 1, 2)) # NCHW for TensorRT
+    t_patch_ms = (time.perf_counter() - t0_patch) * 1000.0
+    print(f"[*] Spatial Patch Extraction: {t_patch_ms:.2f} ms ({len(X_cubes)} valid patches)")
 
     if os.path.exists(idx_file):
         test_indices = np.load(idx_file)
@@ -176,10 +209,10 @@ def main():
         y_test = y_labels[split_idx:]
         print(f"[*] Sliced test partition: {len(X_test)} patches.")
 
-    # 2. Init TensorRT Runner
+    # 4. Init TensorRT Runner
     runner = TRTHSIRunner(engine_path)
 
-    # 3. Latency Benchmark
+    # 5. Latency Benchmark
     power_mon = JetsonPowerMonitor(interval_ms=50)
     power_mon.start()
 
@@ -206,13 +239,14 @@ def main():
 
     print("=" * 75)
     print(f"⚡ JETSON ORIN NANO TENSORRT BENCHMARK RESULTS:")
-    print(f"   Mean Latency: {mean_lat:.3f} ms | Median: {median_lat:.3f} ms | P95: {p95_lat:.3f} ms")
+    print(f"   On-Board Preprocessing (PCA): {t_pca_ms:.2f} ms")
+    print(f"   GPU Mean Latency: {mean_lat:.3f} ms | Median: {median_lat:.3f} ms | P95: {p95_lat:.3f} ms")
     print(f"   Throughput: {fps:.2f} patches/sec (FPS)")
     print(f"   Average Power: {power_stats['power_avg_watts']:.3f} W")
     print(f"   Energy per Patch: {energy_mj:.3f} mJ")
     print("=" * 75)
 
-    # 4. Full Scene Evaluation (Accuracy)
+    # 6. Full Scene Evaluation (Accuracy)
     oa, aa, kappa = 0.0, 0.0, 0.0
     if args.eval_full:
         print(f"\n[*] Evaluating Full Test Set ({len(X_test)} patches) for Accuracy Verification...")
@@ -240,6 +274,8 @@ def main():
         "model_name": "SS-ResNet",
         "precision": args.precision,
         "dataset": args.dataset,
+        "pca_latency_ms": round(t_pca_ms, 2),
+        "patch_extraction_latency_ms": round(t_patch_ms, 2),
         "latency_mean_ms": round(mean_lat, 3),
         "latency_median_ms": round(median_lat, 3),
         "latency_p95_ms": round(p95_lat, 3),

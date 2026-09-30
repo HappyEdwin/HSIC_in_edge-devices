@@ -2,11 +2,13 @@
 """
 Benchmark Runner & Hardware Telemetry for Hyperspectral Classification (SS-ResNet)
 on AMD-Xilinx Kria KV260 (DPUCZDX8G Vitis AI Runtime).
-Dependencies: ONLY standard library + NumPy + VART / XIR (No scipy, no sklearn needed).
+- PCA Preprocessing: Performed 100% ON-BOARD from raw 200-band HSI cube.
+- Dependencies: ONLY Standard Library + NumPy + VART / XIR (No scipy, no sklearn).
 Evaluates:
-  1. Pure Silicon DPU Latency & Throughput (patches/sec)
-  2. Full Scene Classification Time & Accuracy (OA, AA, Cohen's Kappa)
-  3. Power (W) via Kria sysfs/xmutil & Energy per Patch / Scene (mJ)
+  1. On-Board Preprocessing Latency (PCA 200 -> 30 bands + Patch Extraction)
+  2. Pure Silicon DPU Latency & Throughput (patches/sec)
+  3. Full Scene Classification Time & Accuracy (OA, AA, Cohen's Kappa)
+  4. Real-time Power (W) via Kria sysfs/xmutil & Energy per Scene (J)
 """
 
 import os
@@ -106,6 +108,36 @@ def get_process_ram_mb():
         pass
     return res
 
+def apply_pca_on_board(raw_data, weights_path="data/hsi/pca_transform_weights.npy", mean_path="data/hsi/pca_mean.npy", mode="project"):
+    """
+    Executes PCA dimensionality reduction directly on the board CPU using pure NumPy.
+    - raw_data: shape (H, W, B_in), e.g. (145, 145, 200)
+    - mode 'project': Applies pre-fitted orthogonal whitening projection (standard edge deployment)
+    - mode 'fit': Computes covariance and SVD from scratch on the board
+    Returns: pca_data (H, W, 30), elapsed_ms
+    """
+    h, w, b = raw_data.shape
+    flat_X = np.reshape(raw_data, (-1, b)).astype(np.float32)
+
+    t0 = time.perf_counter()
+    if mode == "project" and os.path.exists(weights_path) and os.path.exists(mean_path):
+        W = np.load(weights_path)   # (200, 30)
+        mu = np.load(mean_path)     # (200,)
+        pca_flat = (flat_X - mu) @ W
+    else:
+        # Full SVD/Eig fit from scratch on the board
+        mean = np.mean(flat_X, axis=0)
+        X_c = flat_X - mean
+        cov = np.cov(X_c, rowvar=False)
+        evals, evecs = np.linalg.eigh(cov)
+        idx = np.argsort(evals)[::-1][:30]
+        evals, evecs = evals[idx], evecs[:, idx]
+        pca_flat = (X_c @ evecs) / np.sqrt(evals)
+
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    pca_data = np.reshape(pca_flat, (h, w, 30)).astype(np.float32)
+    return pca_data, elapsed_ms
+
 def pad_with_zeros(X, margin=2):
     padded = np.zeros((X.shape[0] + 2 * margin, X.shape[1] + 2 * margin, X.shape[2]), dtype=X.dtype)
     padded[margin:X.shape[0] + margin, margin:X.shape[1] + margin, :] = X
@@ -135,7 +167,6 @@ def create_image_cubes(X, y, window_size=13, remove_zeros=True):
     return patches_data, patches_labels
 
 def compute_metrics_numpy(y_true, y_pred, num_classes=16):
-    """Computes OA, AA, and Cohen's Kappa using pure NumPy (no sklearn needed)."""
     cm = np.zeros((num_classes, num_classes), dtype=np.int64)
     for t, p in zip(y_true, y_pred):
         if 0 <= t < num_classes and 0 <= p < num_classes:
@@ -178,9 +209,10 @@ def get_dpu_subgraphs(graph):
     return dpu_subgraphs
 
 def main():
-    parser = argparse.ArgumentParser(description="Kria KV260 HSI SS-ResNet Benchmark")
+    parser = argparse.ArgumentParser(description="Kria KV260 HSI SS-ResNet Benchmark with On-Board PCA")
     parser.add_argument("--model", type=str, default="models/xmodel/ss_resnet_indian_kv260.xmodel", help="Path to compiled xmodel")
     parser.add_argument("--dataset", type=str, default="Indian", choices=["Indian", "Pavia"])
+    parser.add_argument("--pca_mode", type=str, default="project", choices=["project", "fit"], help="PCA execution mode on board")
     parser.add_argument("--iterations", type=int, default=1000, help="Number of benchmark iterations for latency (default 1000)")
     parser.add_argument("--eval_full", action="store_true", default=True, help="Evaluate accuracy on full test set")
     parser.add_argument("--output_json", type=str, default="results/hsi/benchmark_kv260.json")
@@ -193,32 +225,39 @@ def main():
 
     print("=" * 75)
     print(f"🚀 Kria KV260 Hyperspectral Benchmark (SS-ResNet)")
-    print(f"   Model: {model_path}")
-    print(f"   Dataset: {args.dataset} Pines | Architecture: 1 Unified DPU Kernel")
-    print(f"   Dependencies: 100% Pure NumPy (Zero scipy/sklearn required)")
+    print(f"   Model: {model_path} (1 Unified DPU Kernel)")
+    print(f"   Dataset: {args.dataset} Pines | On-Board PCA: {args.pca_mode.upper()}")
     print("=" * 75)
 
-    # 1. Load Data from pure NumPy files
-    pca_file = "data/hsi/indian_pines_pca30.npy"
+    # 1. Load Raw Hyperspectral Cube
+    raw_file = "data/hsi/raw_indian_pines.npy"
     gt_file = "data/hsi/indian_pines_gt.npy"
     idx_file = "data/hsi/indian_test_indices.npy"
 
-    if os.path.exists(pca_file) and os.path.exists(gt_file):
-        print(f"[*] Loading preprocessed NumPy cubes from {pca_file}...")
-        pca_data = np.load(pca_file)
+    if os.path.exists(raw_file) and os.path.exists(gt_file):
+        print(f"[*] Loading raw HSI sensor cube from {raw_file}...")
+        raw_data = np.load(raw_file)
         gt = np.load(gt_file)
     else:
-        # Fallback to scipy if available
         import scipy.io as sio
-        print(f"[*] Loading raw .mat files via scipy...")
-        pca_data = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian.mat")['indian_pines_corrected']
-        gt = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian_gt.mat")['indian_pines_gt']
+        print(f"[*] Loading raw .mat files...")
+        raw_data = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian.mat")['indian_pines_corrected'].astype(np.float32)
+        gt = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian_gt.mat")['indian_pines_gt'].astype(np.int64)
 
     num_classes = int(np.max(gt))
-    print(f"[*] HSI Scene: {pca_data.shape}, Ground Truth: {gt.shape}, Classes: {num_classes}")
+    print(f"[*] Raw Sensor Cube: {raw_data.shape} ({raw_data.shape[2]} spectral bands)")
+    print(f"[*] Ground Truth Mask: {gt.shape} ({num_classes} classes)")
 
-    print("[*] Extracting 13x13 spatial-spectral patches...")
+    # 2. Execute PCA on the Board
+    print(f"\n[*] Executing On-Board PCA Reduction ({raw_data.shape[2]} -> 30 bands)...")
+    pca_data, t_pca_ms = apply_pca_on_board(raw_data, mode=args.pca_mode)
+    print(f"✅ On-Board PCA Preprocessing Completed in: {t_pca_ms:.2f} ms! Reduced shape: {pca_data.shape}")
+
+    # 3. Patch Extraction
+    t0_patch = time.perf_counter()
     X_cubes, y_labels = create_image_cubes(pca_data, gt, window_size=13)
+    t_patch_ms = (time.perf_counter() - t0_patch) * 1000.0
+    print(f"[*] Spatial Patch Extraction: {t_patch_ms:.2f} ms ({len(X_cubes)} valid patches)")
 
     if os.path.exists(idx_file):
         test_indices = np.load(idx_file)
@@ -226,13 +265,12 @@ def main():
         y_test = y_labels[test_indices]
         print(f"[*] Loaded exact test partition: {len(X_test)} patches.")
     else:
-        # Fallback: slice 90%
         split_idx = int(0.10 * len(X_cubes))
         X_test = X_cubes[split_idx:]
         y_test = y_labels[split_idx:]
         print(f"[*] Sliced test partition: {len(X_test)} patches.")
 
-    # 2. Initialize VART Runner
+    # 4. Initialize VART Runner
     graph = xir.Graph.deserialize(model_path)
     subgraphs = get_dpu_subgraphs(graph)
     if not subgraphs:
@@ -255,16 +293,14 @@ def main():
     print(f"[*] DPU Input Shape: {in_shape}, FixPos: {in_fixpos} (Scale: {in_scale})")
     print(f"[*] DPU Output Shape: {out_shape}, FixPos: {out_fixpos} (Scale: {out_scale})")
 
-    # 3. Quantize Test Patches
-    # In VART, DPUCZDX8G usually expects NHWC format: (1, 13, 13, 30)
+    # 5. Quantize Test Patches
     if in_shape == (1, 13, 13, 30):
         test_patches_dpu = [np.round(X_test[i:i+1] * in_scale).clip(-128, 127).astype(np.int8) for i in range(len(X_test))]
     else:
-        # NCHW fallback: (1, 30, 13, 13)
         transposed = np.transpose(X_test, (0, 3, 1, 2))
         test_patches_dpu = [np.round(transposed[i:i+1] * in_scale).clip(-128, 127).astype(np.int8) for i in range(len(X_test))]
 
-    # 4. Latency Benchmark
+    # 6. Latency Benchmark
     power_mon = KriaPowerMonitor(interval_ms=50)
     power_mon.start()
 
@@ -298,13 +334,14 @@ def main():
 
     print("=" * 75)
     print(f"⚡ KRIA KV260 DPU SILICON BENCHMARK RESULTS:")
-    print(f"   Mean Latency: {mean_lat:.3f} ms | Median: {median_lat:.3f} ms | P95: {p95_lat:.3f} ms")
+    print(f"   On-Board Preprocessing (PCA): {t_pca_ms:.2f} ms")
+    print(f"   DPU Mean Latency: {mean_lat:.3f} ms | Median: {median_lat:.3f} ms | P95: {p95_lat:.3f} ms")
     print(f"   Throughput: {fps:.2f} patches/sec (FPS)")
     print(f"   Average Power: {power_stats['power_avg_watts']:.3f} W")
     print(f"   Energy per Patch: {energy_mj:.3f} mJ")
     print("=" * 75)
 
-    # 5. Full Scene Evaluation (Accuracy)
+    # 7. Full Scene Evaluation (Accuracy)
     oa, aa, kappa = 0.0, 0.0, 0.0
     if args.eval_full:
         print(f"\n[*] Evaluating Full Test Set ({len(test_patches_dpu)} patches) for Accuracy Verification...")
@@ -336,6 +373,8 @@ def main():
         "model_name": "SS-ResNet",
         "precision": "INT8",
         "dataset": args.dataset,
+        "pca_latency_ms": round(t_pca_ms, 2),
+        "patch_extraction_latency_ms": round(t_patch_ms, 2),
         "latency_mean_ms": round(mean_lat, 3),
         "latency_median_ms": round(median_lat, 3),
         "latency_p95_ms": round(p95_lat, 3),
