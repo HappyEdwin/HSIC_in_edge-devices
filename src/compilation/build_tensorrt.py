@@ -134,6 +134,8 @@ class YOLOInt8Calibrator(trt.IInt8EntropyCalibrator2):
 def get_calibration_images(dataset_yaml="coco128.yaml", num_samples=128):
     import glob
     candidates = [
+        "data/coco128/images/train2017/*.jpg",
+        "/workspace/data/coco128/images/train2017/*.jpg",
         "datasets/coco128/images/train2017/*.jpg",
         "/workspace/datasets/coco128/images/train2017/*.jpg",
         "/home/edwinacevedo/VIP/datasets/coco128/images/train2017/*.jpg",
@@ -197,6 +199,13 @@ def build_engine(
 
     num_network_layers = network.num_layers
     print(f"📋 Grafo ONNX importado con éxito: {num_network_layers} capas detectadas en la definición de red.")
+
+    # Detect input resolution dynamically from network input
+    if network.num_inputs > 0:
+        in_shape = network.get_input(0).shape
+        if len(in_shape) == 4 and in_shape[2] > 0:
+            img_size = in_shape[2]
+            print(f"🎯 Dynamic Input Shape from ONNX: {in_shape} -> Resolution: {img_size}x{img_size}")
 
     config = builder.create_builder_config()
     

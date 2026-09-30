@@ -18,8 +18,8 @@ export:
     simplify: true
     dynamic_batch: false
   tensorrt:
-    output_path: "models/engines/yolov4_tiny_416_fp16.engine"
-    precision: "FP16"
+    output_path: "models/engines/yolov4_tiny_416_int8.engine"
+    precision: "INT8"
     workspace_gb: 4
     min_timing_iterations: 2
     avg_timing_iterations: 2
