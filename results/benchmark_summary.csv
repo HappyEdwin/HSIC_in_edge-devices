@@ -1,3 +1,4 @@
 timestamp,model_name,platform,precision,activation,mode,input_resolution,params_m,total_ops_giga,mAP50,mAP50_95,latency_mean_ms,latency_median_ms,latency_p95_ms,fps,peak_vram_mb,power_avg_watts,power_max_watts,energy_mj_per_frame
 1772723458,yolo11n,jetson_orin_nano,fp16,silu,end2end,640x640,2.624,6.610,0.6758,0.5052,30.99,28.79,35.54,32.27,13.24,6.003,6.309,186.03
 1790790383,yolo11n,kria_kv260,int8,silu,end2end,640x640,2.624,6.610,0.0000,0.0000,189.53,187.61,205.19,5.28,108.20,5.740,6.590,1087.91
+1790796455,yolov4_tiny,kria_kv260,int8,leaky,end2end,416x416,6.057,6.9,0.2872,0.159,74.94,75.12,81.3,13.34,68.68,6.04,8.86,452.64
