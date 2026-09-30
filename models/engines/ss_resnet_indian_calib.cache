@@ -1,0 +1,24 @@
+TRT-8601-EntropyCalibration2
+input: 3d5f983e
+/stem/stem.0/Conv_output_0: 3d5fdbd3
+/stem/stem.2/Relu_output_0: 3d371ae9
+/layer1/conv1/Conv_output_0: 3d79c90a
+/layer1/relu/Relu_output_0: 3d7a30d2
+/layer1/conv2/Conv_output_0: 3d5f7dc4
+/layer1/Add_output_0: 3d92f487
+/layer1/relu_1/Relu_output_0: 3da35308
+/layer2/shortcut/shortcut.0/Conv_output_0: 3d72d597
+/layer2/conv1/Conv_output_0: 3d64e745
+/layer2/relu/Relu_output_0: 3d6da91c
+/layer2/conv2/Conv_output_0: 3d5c1b1d
+/layer2/Add_output_0: 3dacd295
+/layer2/relu_1/Relu_output_0: 3da8959a
+/layer3/shortcut/shortcut.0/Conv_output_0: 3d7d148d
+/layer3/conv1/Conv_output_0: 3d85bcf6
+/layer3/relu/Relu_output_0: 3d9a05df
+/layer3/conv2/Conv_output_0: 3da103bb
+/layer3/Add_output_0: 3df2a945
+/layer3/relu_1/Relu_output_0: 3df2cfde
+/pool/AveragePool_output_0: 3df2cfde
+/classifier/Conv_output_0: 3dc6bba5
+logits: 3dc6bba5

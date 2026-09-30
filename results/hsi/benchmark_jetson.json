@@ -1,0 +1,15 @@
+{
+    "platform": "NVIDIA Jetson Orin Nano",
+    "model_name": "SS-ResNet",
+    "precision": "INT8",
+    "dataset": "Indian",
+    "latency_mean_ms": 0.26,
+    "latency_median_ms": 0.259,
+    "latency_p95_ms": 0.266,
+    "fps": 3846.87,
+    "power_avg_w": 0.0,
+    "energy_mj_per_patch": 0.0,
+    "overall_accuracy_oa": 98.36,
+    "average_accuracy_aa": 97.86,
+    "kappa": 98.13
+}

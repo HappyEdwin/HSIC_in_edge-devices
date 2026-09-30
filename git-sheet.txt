@@ -64,5 +64,21 @@ sudo xmutil loadapp kv260-smartcam
 # 4. Verificar que el DPU está activo en hardware:
 xdputil query
 
-# 5. Ejecutar la inferencia con VART:
-python3 src/inference/benchmark_kv260.py --model models/xmodel/yolo11m_kv260.xmodel --iterations 100
+# 5. Ejecutar la inferencia con VART (YOLOv4-tiny):
+python3 src/inference/benchmark_kv260.py --model models/xmodel/yolov4_tiny_kv260.xmodel --mode end2end --iterations 128
+
+# 6. Ejecutar la inferencia con VART (Clasificación Hiperespectral SS-ResNet 100% DPU):
+python3 src/inference/benchmark_hsi_kv260.py \
+  --model models/xmodel/ss_resnet_indian_kv260.xmodel \
+  --dataset Indian \
+  --iterations 1000
+
+# --- Ejecución HSI en NVIDIA Jetson Orin Nano ---
+# Compilar motor TensorRT INT8 / FP16 si no está precompilado:
+# python3 src/compilation/build_tensorrt_hsi.py --onnx models/onnx/ss_resnet_indian_b1.onnx --precision INT8
+# Ejecutar benchmark de inferencia hiperespectral:
+python3 src/inference/benchmark_hsi_jetson.py \
+  --engine models/engines/ss_resnet_indian_b1_int8.engine \
+  --precision INT8 \
+  --dataset Indian \
+  --iterations 1000
