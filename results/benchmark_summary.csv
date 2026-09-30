@@ -4,3 +4,4 @@ timestamp,model_name,platform,precision,activation,mode,input_resolution,params_
 1790796455,yolov4_tiny,kria_kv260,int8,leaky,end2end,416x416,6.057,6.9,0.2872,0.159,74.94,75.12,81.3,13.34,68.68,6.04,8.86,452.64
 1772736019,yolov4_tiny,jetson_orin_nano,int8,leaky,end2end,416x416,6.057,6.9,0.3223,0.2063,15.39,14.89,19.23,64.99,6.76,5.97,6.389,91.88
 1790801609,yolov4_tiny,kria_kv260,int8,leaky,end2end,416x416,6.057,6.9,0.3164,0.1783,57.38,57.31,64.9,17.43,68.37,6.373,8.91,365.68
+1790801821,yolov4_tiny,kria_kv260,int8,leaky,end2end,416x416,6.057,6.9,0.3155,0.178,51.28,51.15,56.54,19.5,69.23,6.297,8.88,322.88
