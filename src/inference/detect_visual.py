@@ -150,24 +150,46 @@ def run_xmodel_inference(xmodel_path: str, image_path: str, img_size: int = 640)
 
     dpu_subs = [c for c in children if c.has_attr("device") and c.get_attr("device").upper() == "DPU"]
     runners = []
-    first_scale = 1.0
+    input_runner_idx = 0
+    input_tensor_idx = 0
+    input_scale = 1.0
+
     for sub in dpu_subs:
         r = vart.Runner.create_runner(sub, "run")
         in_t = r.get_input_tensors()
         out_t = r.get_output_tensors()
-        if len(runners) == 0 and len(in_t) > 0:
-            fp = in_t[0].get_attr("fix_point") or 0
-            first_scale = 2.0 ** fp
         in_bufs = [np.zeros(t.dims, dtype=np.int8) for t in in_t]
         out_bufs = [np.empty(t.dims, dtype=np.int8) for t in out_t]
         runners.append((r, in_bufs, out_bufs, out_t))
+
+    found_input = False
+    for r_idx, (r, in_bufs, out_bufs, _) in enumerate(runners):
+        for t_idx, t in enumerate(r.get_input_tensors()):
+            if len(t.dims) == 4 and (t.dims[3] == 3 or t.dims[1] == 3):
+                input_runner_idx = r_idx
+                input_tensor_idx = t_idx
+                fp = t.get_attr("fix_point")
+                if fp is not None:
+                    input_scale = 2.0 ** fp
+                print(f"[*] Primary Input Runner #{r_idx} - Tensor: {t.name}, Shape: {t.dims}, Fixpos: {fp}")
+                found_input = True
+                break
+        if found_input:
+            break
+
+    if not found_input and runners:
+        in_t = runners[0][0].get_input_tensors()
+        if in_t:
+            fp = in_t[0].get_attr("fix_point")
+            if fp is not None:
+                input_scale = 2.0 ** fp
 
     # Preprocess
     with Image.open(image_path) as img:
         img_rgb = img.convert("RGB").resize((img_size, img_size), Image.BILINEAR)
         img_np = np.asarray(img_rgb, dtype=np.float32) / 255.0
-        q_in = (img_np * first_scale).astype(np.int8)
-        runners[0][1][0] = np.expand_dims(q_in, axis=0)
+        q_in = np.round(img_np * input_scale).clip(-128, 127).astype(np.int8)
+        runners[input_runner_idx][1][input_tensor_idx] = np.expand_dims(q_in, axis=0)
 
     # DPU Execute
     for r, in_b, out_b, _ in runners:

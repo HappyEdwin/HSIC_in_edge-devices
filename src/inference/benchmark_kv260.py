@@ -258,13 +258,26 @@ def main():
         else:
             raise FileNotFoundError(f"Model not found: {model_path}")
 
-    is_leaky = "leaky" in os.path.basename(model_path)
-    model_tag = "yolo11n_leaky" if is_leaky else "yolo11n"
+    base_name = os.path.basename(model_path).lower()
+    is_leaky = "leaky" in base_name
+    if "yolov8n" in base_name or "yolo8n" in base_name:
+        model_tag = "yolov8n_leaky" if is_leaky else "yolov8n"
+        params_m = 3.157
+        total_ops_giga = 8.860
+    elif "yolo11m" in base_name:
+        model_tag = "yolo11m_leaky" if is_leaky else "yolo11m"
+        params_m = 20.08
+        total_ops_giga = 68.000
+    else:
+        model_tag = "yolo11n_leaky" if is_leaky else "yolo11n"
+        params_m = 2.624
+        total_ops_giga = 6.610
     ram_initial = get_process_ram_mb()
 
     print("=" * 75)
     print(f"🚀 Kria KV260 DPU VART Runner & Telemetry [{args.mode.upper()} MODE]")
     print(f"   Model: {model_path} ({'LeakyReLU Fused' if is_leaky else 'SiLU Chained'})")
+    print(f"   Model Tag: {model_tag} | Params: {params_m}M | Complexity: {total_ops_giga} GOPs")
     print(f"   Iterations: {args.iterations} (Warmup: {args.warmup})")
     print(f"   Initial Process RAM: {ram_initial['rss_mb']} MB")
     print("=" * 75)
@@ -279,22 +292,16 @@ def main():
 
     # 2. Create VART Runner Pipelines
     runner_pipelines = []
-    first_input_scale = 1.0
-    first_in_shape = (1, 640, 640, 3)
+    input_runner_idx = 0
+    input_tensor_idx = 0
+    input_scale = 1.0
+    input_shape = (1, 640, 640, 3)
 
     for sub in dpu_subgraphs:
         try:
             r = vart.Runner.create_runner(sub, "run")
             in_tensors = r.get_input_tensors()
             out_tensors = r.get_output_tensors()
-
-            if len(runner_pipelines) == 0 and len(in_tensors) > 0:
-                first_in_shape = in_tensors[0].dims
-                fixpos = in_tensors[0].get_attr("fix_point")
-                if fixpos is not None:
-                    first_input_scale = 2.0 ** fixpos
-                print(f"[*] Primary DPU Inputs: {[t.name for t in in_tensors]} | Shapes: {[t.dims for t in in_tensors]}")
-
             in_buffers = [np.zeros(t.dims, dtype=np.int8) for t in in_tensors]
             out_buffers = [np.empty(t.dims, dtype=np.int8) for t in out_tensors]
             runner_pipelines.append((r, in_buffers, out_buffers, sub.get_name(), out_tensors))
@@ -304,12 +311,39 @@ def main():
     if not runner_pipelines:
         raise RuntimeError("Could not instantiate VART runners.")
 
+    # Find the primary input runner (the one expecting 3 channels: dims[3] == 3 or dims[1] == 3)
+    found_input = False
+    for r_idx, (r, in_bufs, out_bufs, sub_name, _) in enumerate(runner_pipelines):
+        for t_idx, t in enumerate(r.get_input_tensors()):
+            if len(t.dims) == 4 and (t.dims[3] == 3 or t.dims[1] == 3):
+                input_runner_idx = r_idx
+                input_tensor_idx = t_idx
+                input_shape = t.dims
+                fixpos = t.get_attr("fix_point")
+                if fixpos is not None:
+                    input_scale = 2.0 ** fixpos
+                print(f"[*] Primary Input Runner #{r_idx} ({sub_name}) - Tensor: {t.name}, Shape: {t.dims}, Fixpos: {fixpos}")
+                found_input = True
+                break
+        if found_input:
+            break
+
+    if not found_input and runner_pipelines:
+        first_r = runner_pipelines[0][0]
+        in_t = first_r.get_input_tensors()
+        if in_t:
+            input_shape = in_t[0].dims
+            fp = in_t[0].get_attr("fix_point")
+            if fp is not None:
+                input_scale = 2.0 ** fp
+        print(f"[*] Fallback to Runner #0 input tensor: shape {input_shape}")
+
     ram_loaded = get_process_ram_mb()
     print(f"✅ Initialized {len(runner_pipelines)} DPU execution stage(s).")
     print(f"   Process RAM with Runners: {ram_loaded['rss_mb']} MB (Buffer Delta: +{round(ram_loaded['rss_mb'] - ram_initial['rss_mb'], 2)} MB)")
 
-    height = first_in_shape[1] if len(first_in_shape) > 2 else 640
-    width = first_in_shape[2] if len(first_in_shape) > 2 else 640
+    height = input_shape[1] if len(input_shape) > 2 else 640
+    width = input_shape[2] if len(input_shape) > 2 else 640
 
     # 3. Prepare Dataset
     image_paths, labels_dir = ensure_dataset(args.data_dir)
@@ -341,8 +375,8 @@ def main():
             t0 = time.perf_counter()
             # A. Preprocessing
             if img_p:
-                cur_img = preprocess_image(img_p, (height, width), first_input_scale)
-                runner_pipelines[0][1][0] = cur_img
+                cur_img = preprocess_image(img_p, (height, width), input_scale)
+                runner_pipelines[input_runner_idx][1][input_tensor_idx] = cur_img
 
             # B. DPU Hardware Inference
             for r, in_bufs, out_bufs, _, _ in runner_pipelines:
@@ -403,9 +437,9 @@ def main():
 
         else:
             # Hardware-only timing (matches pure accelerator speed)
-            if img_p and len(runner_pipelines[0][1]) > 0:
-                cur_img = preprocess_image(img_p, (height, width), first_input_scale)
-                runner_pipelines[0][1][0] = cur_img
+            if img_p and len(runner_pipelines[input_runner_idx][1]) > input_tensor_idx:
+                cur_img = preprocess_image(img_p, (height, width), input_scale)
+                runner_pipelines[input_runner_idx][1][input_tensor_idx] = cur_img
 
             t0 = time.perf_counter()
             for r, in_bufs, out_bufs, _, _ in runner_pipelines:
@@ -462,8 +496,8 @@ def main():
         "activation": activation_str,
         "mode": args.mode,
         "input_resolution": f"{width}x{height}",
-        "params_m": 2.624,
-        "total_ops_giga": 6.610,
+        "params_m": params_m,
+        "total_ops_giga": total_ops_giga,
         "latency_mean_ms": round(mean_lat, 2),
         "latency_median_ms": round(median_lat, 2),
         "latency_p95_ms": round(p95_lat, 2),
@@ -494,8 +528,8 @@ def main():
         "activation": activation_str,
         "mode": args.mode,
         "input_resolution": f"{width}x{height}",
-        "params_m": 2.624,
-        "total_ops_giga": 6.610,
+        "params_m": params_m,
+        "total_ops_giga": total_ops_giga,
         "mAP50": map50,
         "mAP50_95": map50_95,
         "latency_mean_ms": round(mean_lat, 2),
