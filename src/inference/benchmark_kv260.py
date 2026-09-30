@@ -219,11 +219,24 @@ def get_dpu_subgraphs(graph):
     return dpu_subgraphs
 
 def preprocess_image(image_path: str, target_shape=(640, 640), fix_scale=1.0) -> np.ndarray:
+    try:
+        import cv2
+        img = cv2.imread(image_path)
+        if img is not None:
+            h, w = target_shape
+            img = cv2.resize(img, (w, h), interpolation=cv2.INTER_LINEAR)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            quant_factor = fix_scale / 255.0
+            quant_input = np.round(img.astype(np.float32) * quant_factor).clip(-128, 127).astype(np.int8)
+            return np.expand_dims(quant_input, axis=0)
+    except Exception:
+        pass
+
     with Image.open(image_path) as img:
         img = img.convert("RGB")
         img = img.resize((target_shape[1], target_shape[0]), Image.BILINEAR)
-        img_np = np.asarray(img, dtype=np.float32) / 255.0
-        quant_input = (img_np * fix_scale).astype(np.int8)
+        img_np = np.asarray(img, dtype=np.float32) * (fix_scale / 255.0)
+        quant_input = np.round(img_np).clip(-128, 127).astype(np.int8)
         return np.expand_dims(quant_input, axis=0)
 
 def main():
@@ -337,27 +350,47 @@ def main():
                 r.wait(job_id)
 
             # C. Postprocessing (Decode + NMS)
-            # Find output heads (64 channels for box, 80 channels for cls)
+            # Find output heads (144 channels unified, or 64/80 separate)
             scale_outputs = []
+            # 1. Unified 144-channel heads (LeakyReLU fused)
             for _, _, out_bufs, _, out_tensors in runner_pipelines:
                 for b_idx, tensor in enumerate(out_tensors):
                     dims = tensor.dims
-                    fixpos = tensor.get_attr("fix_point") or 0
-                    scale = 2.0 ** (-fixpos)
-                    buf_f = out_bufs[b_idx].astype(np.float32) * scale
-                    # Determine scale from spatial dimension
-                    if len(dims) == 4:
-                        gh, gw, ch = dims[1], dims[2], dims[3]
-                        if ch == 64:
-                            stride = height // gh
-                            # Search corresponding cls head in same or other buffer
-                            for _, _, ob2, _, ot2 in runner_pipelines:
-                                for b2_idx, t2 in enumerate(ot2):
-                                    if len(t2.dims) == 4 and t2.dims[1] == gh and t2.dims[3] == 80:
-                                        fix2 = t2.get_attr("fix_point") or 0
-                                        cls_f = ob2[b2_idx].astype(np.float32) * (2.0 ** -fix2)
-                                        scale_outputs.append((buf_f, cls_f, stride))
-                                        break
+                    if len(dims) == 4 and dims[3] == 144:
+                        gh = dims[1]
+                        stride = height // gh
+                        fixpos = tensor.get_attr("fix_point") or 0
+                        scale = 2.0 ** (-fixpos)
+                        buf_f = out_bufs[b_idx].astype(np.float32) * scale
+                        box_f = buf_f[..., :64]
+                        cls_f = buf_f[..., 64:]
+                        scale_outputs.append((box_f, cls_f, stride))
+
+            # 2. Separate 64/80 channel heads (SiLU unfused)
+            # Ensure we only pick TRUE detection heads (exactly 1 pair per spatial scale: 80, 40, 20)
+            if not scale_outputs:
+                box_heads = {}
+                cls_heads = {}
+                for _, _, out_bufs, sub_name, out_tensors in runner_pipelines:
+                    is_detect = "Detect" in sub_name or "cv2" in sub_name or "cv3" in sub_name
+                    for b_idx, tensor in enumerate(out_tensors):
+                        dims = tensor.dims
+                        t_name = tensor.name
+                        if len(dims) == 4:
+                            gh, ch = dims[1], dims[3]
+                            if gh in (height // 8, height // 16, height // 32):
+                                fixpos = tensor.get_attr("fix_point") or 0
+                                scale = 2.0 ** (-fixpos)
+                                if ch == 64 and ("cv2" in t_name or is_detect or gh not in box_heads):
+                                    box_heads[gh] = (out_bufs[b_idx].astype(np.float32) * scale, height // gh)
+                                elif ch == 80 and ("cv3" in t_name or is_detect or gh not in cls_heads):
+                                    cls_heads[gh] = out_bufs[b_idx].astype(np.float32) * scale
+
+                for gh in sorted(box_heads.keys(), reverse=True):
+                    if gh in cls_heads:
+                        buf_f, stride = box_heads[gh]
+                        cls_f = cls_heads[gh]
+                        scale_outputs.append((buf_f, cls_f, stride))
 
             if scale_outputs:
                 preds = postprocess_dpu_heads(scale_outputs, conf_threshold=0.25, iou_threshold=0.65, img_size=width)
@@ -395,13 +428,13 @@ def main():
     fps = float(1000.0 / mean_lat)
 
     # 8. Evaluate Live mAP if End-to-End
-    map50 = 0.720
-    map50_95 = 0.558
+    map50 = 0.0
+    map50_95 = 0.0
     if args.mode == "end2end" and labels_dir and os.path.exists(labels_dir) and all_predictions:
         print("\n🎯 Evaluating live empirical mAP on COCO128 ground truth...")
         coco_eval_res = evaluate_predictions(all_predictions, labels_dir, width, height)
-        map50 = coco_eval_res["mAP50"] if coco_eval_res["mAP50"] > 0 else 0.720
-        map50_95 = coco_eval_res["mAP50_95"] if coco_eval_res["mAP50_95"] > 0 else 0.558
+        map50 = coco_eval_res.get("mAP50", 0.0)
+        map50_95 = coco_eval_res.get("mAP50_95", 0.0)
 
     print("\n" + "=" * 75)
     print(f"📊 RESULTADOS DEL BENCHMARK ({'END-TO-END' if args.mode == 'end2end' else 'HARDWARE DPU'})")

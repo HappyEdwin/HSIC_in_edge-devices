@@ -176,22 +176,43 @@ def run_xmodel_inference(xmodel_path: str, image_path: str, img_size: int = 640)
 
     # Postprocess
     scale_outputs = []
+    # 1. Check for unified 144-channel heads first (LeakyReLU fused xmodel)
     for _, _, out_bufs, out_tensors in runners:
         for b_idx, tensor in enumerate(out_tensors):
             dims = tensor.dims
-            fp = tensor.get_attr("fix_point") or 0
-            scale = 2.0 ** (-fp)
-            buf_f = out_bufs[b_idx].astype(np.float32) * scale
-            if len(dims) == 4 and dims[3] == 64:
+            if len(dims) == 4 and dims[3] == 144:
                 gh = dims[1]
                 stride = img_size // gh
-                for _, _, ob2, ot2 in runners:
-                    for b2_idx, t2 in enumerate(ot2):
-                        if len(t2.dims) == 4 and t2.dims[1] == gh and t2.dims[3] == 80:
-                            fp2 = t2.get_attr("fix_point") or 0
-                            cls_f = ob2[b2_idx].astype(np.float32) * (2.0 ** -fp2)
-                            scale_outputs.append((buf_f, cls_f, stride))
-                            break
+                fp = tensor.get_attr("fix_point") or 0
+                scale = 2.0 ** (-fp)
+                buf_f = out_bufs[b_idx].astype(np.float32) * scale
+                box_f = buf_f[..., :64]
+                cls_f = buf_f[..., 64:]
+                scale_outputs.append((box_f, cls_f, stride))
+
+    # 2. Fallback to separate 64 and 80 channel heads (SiLU unfused xmodel)
+    if not scale_outputs:
+        box_heads = {}
+        cls_heads = {}
+        for _, _, out_bufs, out_tensors in runners:
+            for b_idx, tensor in enumerate(out_tensors):
+                dims = tensor.dims
+                t_name = tensor.name
+                if len(dims) == 4:
+                    gh, ch = dims[1], dims[3]
+                    if gh in (img_size // 8, img_size // 16, img_size // 32):
+                        fp = tensor.get_attr("fix_point") or 0
+                        scale = 2.0 ** (-fp)
+                        if ch == 64 and ("cv2" in t_name or gh not in box_heads):
+                            box_heads[gh] = (out_bufs[b_idx].astype(np.float32) * scale, img_size // gh)
+                        elif ch == 80 and ("cv3" in t_name or gh not in cls_heads):
+                            cls_heads[gh] = out_bufs[b_idx].astype(np.float32) * scale
+
+        for gh in sorted(box_heads.keys(), reverse=True):
+            if gh in cls_heads:
+                buf_f, stride = box_heads[gh]
+                cls_f = cls_heads[gh]
+                scale_outputs.append((buf_f, cls_f, stride))
 
     preds = postprocess_dpu_heads(scale_outputs, conf_threshold=0.25, iou_threshold=0.65, img_size=img_size)
     t1 = time.perf_counter()
