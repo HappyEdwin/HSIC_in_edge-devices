@@ -73,12 +73,10 @@ python3 src/inference/benchmark_hsi_kv260.py \
   --dataset Indian \
   --iterations 1000
 
-# --- Ejecución HSI en NVIDIA Jetson Orin Nano ---
-# Compilar motor TensorRT INT8 / FP16 si no está precompilado:
-# python3 src/compilation/build_tensorrt_hsi.py --onnx models/onnx/ss_resnet_indian_b1.onnx --precision INT8
-# Ejecutar benchmark de inferencia hiperespectral:
-python3 src/inference/benchmark_hsi_jetson.py \
-  --engine models/engines/ss_resnet_indian_b1_int8.engine \
-  --precision INT8 \
-  --dataset Indian \
-  --iterations 1000
+# --- Ejecución HSI en NVIDIA Jetson Orin Nano (Vía Docker launch_jetson_docker.sh) ---
+# Ejecutar todo el benchmark hiperespectral con Docker (compilación TRT INT8 + PCA on-board + inferencia):
+./launch_jetson_docker.sh --hsi
+
+# O si se desea ejecutar en modo interactivo dentro del contenedor:
+# ./launch_jetson_docker.sh bash
+# python3 src/inference/benchmark_hsi_jetson.py --engine models/engines/ss_resnet_indian_b1_int8.engine --precision INT8 --dataset Indian --iterations 1000

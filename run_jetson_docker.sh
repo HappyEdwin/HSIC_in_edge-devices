@@ -27,7 +27,41 @@ if [ -f "$DLA_DEB" ] && [ ! -f "/usr/lib/aarch64-linux-gnu/libnvdla_compiler.so"
     echo "✅ Fix DLA aplicado."
 fi
 
-# 3. Verificar dependencias de Python (sin romper PyTorch/TensorRT nativos de JetPack)
+# 3. Flujo Hiperespectral (SS-ResNet INT8)
+if [[ "$*" == *"--hsi"* ]] || [[ "$1" == "hsi" ]]; then
+    echo ""
+    echo "========================================================="
+    echo "🛰️  BENCHMARK HIPERESPECTRAL (SS-ResNet INT8)"
+    echo "========================================================="
+    mkdir -p models/engines results/hsi
+    HSI_ENGINE="models/engines/ss_resnet_indian_b1_int8.engine"
+
+    if [ ! -f "$HSI_ENGINE" ] || [[ "$*" == *"--rebuild"* ]]; then
+        echo "🔨 Compilando motor TensorRT INT8 para SS-ResNet..."
+        python3 src/compilation/build_tensorrt_hsi.py \
+            --onnx models/onnx/ss_resnet_indian_b1.onnx \
+            --output "$HSI_ENGINE" \
+            --precision INT8
+    else
+        echo "ℹ️  Motor TensorRT ya existente en: $HSI_ENGINE"
+    fi
+
+    echo ""
+    echo "⏱️  Ejecutando benchmark de inferencia hiperespectral..."
+    python3 src/inference/benchmark_hsi_jetson.py \
+        --engine "$HSI_ENGINE" \
+        --precision INT8 \
+        --dataset Indian \
+        --iterations 1000
+
+    echo ""
+    echo "🎉 Benchmark Hiperespectral completado exitosamente!"
+    echo "Resultados registrados en: results/hsi/benchmark_jetson.json"
+    exit 0
+fi
+
+# 4. Flujo Detección YOLO (si no es HSI)
+# Verificar dependencias de Python
 echo ""
 echo "📦 Verificando dependencias de Python..."
 python3 -c "import ultralytics" 2>/dev/null || {
@@ -38,7 +72,7 @@ python3 -c "import ultralytics" 2>/dev/null || {
 python3 -c "import tensorrt; print('TensorRT Version:', tensorrt.__version__)"
 python3 -c "import torch; print('PyTorch CUDA disponible:', torch.cuda.is_available(), '| Dispositivo:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
 
-# 4. Leer configuración del modelo dinámicamente
+# Leer configuración del modelo dinámicamente
 CONFIG_FILE="configs/yolo11n.yaml"
 REBUILD_FLAG=""
 
@@ -79,7 +113,7 @@ if [ ! -f "$ONNX_MODEL" ]; then
     python3 src/compilation/export_onnx.py --weights "$WEIGHTS_PATH" --output "$ONNX_MODEL" --imgsz "$IMG_SIZE" --opset 17
 fi
 
-# 5. Compilación del TensorRT Engine nativo para Orin Nano
+# Compilación del TensorRT Engine nativo para Orin Nano
 if [ ! -f "$ENGINE_MODEL" ] || [ "$REBUILD_FLAG" == "--rebuild" ]; then
     echo ""
     echo "========================================================="
@@ -96,7 +130,7 @@ else
     echo "    (Para forzar recompilación, ejecuta con --rebuild)"
 fi
 
-# 6. Inferencia y Benchmarking End-to-End con telemetría
+# Inferencia y Benchmarking End-to-End con telemetría
 echo ""
 echo "========================================================="
 echo "⏱️  EJECUTANDO BENCHMARK END-TO-END Y TELEMETRÍA"

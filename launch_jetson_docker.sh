@@ -4,11 +4,10 @@
 
 set -e
 
-# Imagen por defecto si no se pasa como primer argumento o variable de entorno
 DEFAULT_IMAGE="dustynv/l4t-pytorch:r36.4.0"
 CONTAINER_IMAGE="${DOCKER_IMAGE:-$DEFAULT_IMAGE}"
 
-if [ -n "$1" ] && [[ "$1" != --* ]] && [[ "$1" != *.yaml ]] && [[ "$1" != *.yml ]]; then
+if [ -n "$1" ] && [[ "$1" != --* ]] && [[ "$1" != *.yaml ]] && [[ "$1" != *.yml ]] && [[ "$1" != "bash" ]] && [[ "$1" != "sh" ]] && [[ "$1" != "hsi" ]]; then
     CONTAINER_IMAGE="$1"
     shift
 fi
@@ -23,6 +22,13 @@ if [ -f "/usr/bin/tegrastats" ]; then
     EXTRA_MOUNTS="-v /usr/bin/tegrastats:/usr/bin/tegrastats:ro"
 fi
 
+# Soporte para abrir bash interactivo o ejecutar run_jetson_docker.sh
+if [ "$1" == "bash" ] || [ "$1" == "sh" ]; then
+    RUN_CMD="/bin/bash"
+else
+    RUN_CMD="/bin/bash /workspace/run_jetson_docker.sh $@"
+fi
+
 docker run --runtime nvidia --gpus all --privileged -it --rm \
     --network host \
     --ipc=host \
@@ -33,4 +39,4 @@ docker run --runtime nvidia --gpus all --privileged -it --rm \
     -v "$(pwd)":/workspace \
     -w /workspace \
     "$CONTAINER_IMAGE" \
-    /bin/bash /workspace/run_jetson_docker.sh "$@"
+    $RUN_CMD
