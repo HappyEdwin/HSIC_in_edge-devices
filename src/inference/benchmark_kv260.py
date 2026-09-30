@@ -244,7 +244,7 @@ def main():
     parser.add_argument("--model", type=str, default="models/xmodel/yolo11n_leaky_kv260.xmodel", help="Path to compiled .xmodel")
     parser.add_argument("--mode", type=str, default="end2end", choices=["hardware", "end2end"], help="Benchmark mode: hardware (DPU only) or end2end (Pre+DPU+NMS)")
     parser.add_argument("--data-dir", type=str, default="data/coco128/images/train2017", help="Dataset directory")
-    parser.add_argument("--iterations", type=int, default=100, help="Benchmark iterations")
+    parser.add_argument("--iterations", type=int, default=128, help="Benchmark iterations (default: 128 for full COCO128 dataset)")
     parser.add_argument("--warmup", type=int, default=10, help="Warmup iterations")
     parser.add_argument("--output-csv", type=str, default="results/benchmark_summary.csv", help="Summary CSV")
     args = parser.parse_args()
