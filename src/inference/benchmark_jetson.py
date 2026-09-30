@@ -17,6 +17,77 @@ from src.evaluation.evaluate_coco import evaluate_model_coco
 from ultralytics import YOLO
 import torch
 
+class TRTYOLOv4Runner:
+    def __init__(self, engine_path: str, img_size: int = 416):
+        import tensorrt as trt
+        self.img_size = img_size
+        self.logger = trt.Logger(trt.Logger.WARNING)
+        with open(engine_path, "rb") as f:
+            runtime = trt.Runtime(self.logger)
+            self.engine = runtime.deserialize_cuda_engine(f.read())
+        self.context = self.engine.create_execution_context()
+        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.bindings = []
+        self.output_tensors = []
+        
+        num_io = getattr(self.engine, "num_io_tensors", None)
+        if num_io is not None:
+            for i in range(num_io):
+                name = self.engine.get_tensor_name(i)
+                shape = tuple(self.engine.get_tensor_shape(name))
+                dtype = trt.nptype(self.engine.get_tensor_dtype(name))
+                t = torch.empty(shape, dtype=getattr(torch, np.dtype(dtype).name), device=self.device)
+                self.bindings.append(t.data_ptr())
+                if self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT:
+                    self.input_tensor = t
+                    self.context.set_tensor_address(name, t.data_ptr())
+                else:
+                    self.output_tensors.append((name, t, shape))
+                    self.context.set_tensor_address(name, t.data_ptr())
+        else:
+            for i in range(self.engine.num_bindings):
+                shape = tuple(self.engine.get_binding_shape(i))
+                dtype = trt.nptype(self.engine.get_binding_dtype(i))
+                t = torch.empty(shape, dtype=getattr(torch, np.dtype(dtype).name), device=self.device)
+                self.bindings.append(t.data_ptr())
+                if self.engine.binding_is_input(i):
+                    self.input_tensor = t
+                else:
+                    self.output_tensors.append((self.engine.get_binding_name(i), t, shape))
+
+    def __call__(self, img_input, imgsz: int = 416, verbose: bool = False):
+        import cv2
+        from src.evaluation.yolo_decoder import postprocess_yolov4_tiny_heads
+        if isinstance(img_input, str):
+            img = cv2.imread(img_input)
+            img = cv2.resize(img, (imgsz, imgsz))
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        elif isinstance(img_input, np.ndarray):
+            img = cv2.resize(img_input, (imgsz, imgsz))
+            if img.ndim == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        else:
+            img = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+
+        img_t = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float().to(self.device) / 255.0
+        self.input_tensor.copy_(img_t)
+        
+        if hasattr(self.context, "execute_async_v3"):
+            self.context.execute_async_v3(torch.cuda.current_stream().cuda_stream)
+        elif hasattr(self.context, "execute_v2"):
+            self.context.execute_v2(self.bindings)
+
+        scale_outputs = []
+        for name, t, shape in self.output_tensors:
+            arr = t.cpu().numpy()
+            if arr.ndim == 4 and arr.shape[1] == 255:
+                arr = np.transpose(arr, (0, 2, 3, 1))
+            gh = arr.shape[1]
+            stride = imgsz // gh
+            scale_outputs.append((arr[0], stride))
+        preds = postprocess_yolov4_tiny_heads(scale_outputs, conf_threshold=0.25, iou_threshold=0.65, img_size=imgsz)
+        return preds
+
 def benchmark_jetson(
     config_path: str = "configs/yolo11n.yaml",
     engine_path: str = None
@@ -43,7 +114,10 @@ def benchmark_jetson(
         )
 
     print(f"📦 Cargando modelo compilado: {engine_path}")
-    model = YOLO(engine_path, task="detect")
+    if "yolov4" in model_name:
+        model = TRTYOLOv4Runner(engine_path, img_size=img_size)
+    else:
+        model = YOLO(engine_path, task="detect")
 
     # 1. Warmup
     print(f"\n🔥 [WARMUP] Ejecutando {warmup_runs} pasadas de calentamiento...")
@@ -133,17 +207,35 @@ def benchmark_jetson(
     # 6. Evaluación de Precisión del Engine en COCO128
     print("\n🎯 Evaluando precisión mAP del motor TensorRT en COCO128...")
     coco_metrics = {"mAP50": 0.0, "mAP50_95": 0.0}
-    try:
-        coco_metrics = evaluate_model_coco(
-            model_path=engine_path,
-            data_yaml=dataset_yaml,
-            img_size=img_size
-        )
-    except Exception as e:
-        print(f"⚠️  No se pudo calcular mAP completo en el engine: {e}")
+    if "yolov4" in model_name:
+        try:
+            from src.evaluation.coco_eval import evaluate_predictions
+            all_preds = {}
+            for img_p in coco_images:
+                stem = Path(img_p).stem
+                p = model(img_p, imgsz=img_size, verbose=False)
+                all_preds[stem] = p
+            lbl_dir = "data/coco128/labels/train2017"
+            if not os.path.exists(lbl_dir):
+                lbl_dir = "datasets/coco128/labels/train2017"
+            coco_metrics = evaluate_predictions(all_preds, lbl_dir, img_size, img_size)
+            print(f"   • mAP@50:     {coco_metrics.get('mAP50', 0.0):.4f}")
+            print(f"   • mAP@50-95:  {coco_metrics.get('mAP50_95', 0.0):.4f}")
+        except Exception as e:
+            print(f"⚠️  No se pudo calcular mAP para YOLOv4-tiny: {e}")
+    else:
+        try:
+            coco_metrics = evaluate_model_coco(
+                model_path=engine_path,
+                data_yaml=dataset_yaml,
+                img_size=img_size
+            )
+        except Exception as e:
+            print(f"⚠️  No se pudo calcular mAP completo en el engine: {e}")
 
     # 7. Obtener complejidad del modelo (lookup o cálculo)
     MODEL_SPECS = {
+        "yolov4_tiny": {"params_m": 6.057, "gflops": 6.90},
         "yolo11n": {"params_m": 2.624, "gflops": 6.61},
         "yolo11s": {"params_m": 9.43, "gflops": 21.5},
         "yolo11m": {"params_m": 20.09, "gflops": 68.0},
@@ -156,7 +248,7 @@ def benchmark_jetson(
     params_m = cfg.get("model", {}).get("params_m", 0.0)
     gflops = cfg.get("model", {}).get("gflops", 0.0)
     weights_path = cfg.get("model", {}).get("weights", "")
-    if (params_m == 0.0 or gflops == 0.0) and weights_path and os.path.exists(weights_path):
+    if (params_m == 0.0 or gflops == 0.0) and weights_path and os.path.exists(weights_path) and not "yolov4" in model_name:
         try:
             pt_m = YOLO(weights_path)
             params_m = round(count_parameters(pt_m) / 1e6, 3)
@@ -173,7 +265,7 @@ def benchmark_jetson(
         "model_name": model_name,
         "platform": "jetson_orin_nano",
         "precision": precision,
-        "activation": "leaky" if "leaky" in model_name else "silu",
+        "activation": "leaky" if "leaky" in model_name or "yolov4" in model_name else "silu",
         "mode": "end2end",
         "input_resolution": f"{img_size}x{img_size}",
         "params_m": params_m,

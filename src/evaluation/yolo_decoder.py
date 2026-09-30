@@ -199,3 +199,77 @@ def postprocess_dpu_heads(
     final_cls = cls_ids_concat[keep_indices, None].astype(np.float32)
 
     return np.concatenate([final_boxes, final_scores, final_cls], axis=-1)
+
+# Default COCO anchors for YOLOv4-tiny (416x416 input)
+YOLOV4_TINY_ANCHORS = {
+    16: [(10, 14), (23, 27), (37, 58)],      # P4: 26x26 (stride 16)
+    32: [(81, 82), (135, 169), (344, 319)]   # P5: 13x13 (stride 32)
+}
+
+def postprocess_yolov4_tiny_heads(
+    scale_outputs: List[Tuple[np.ndarray, int]],
+    conf_threshold: float = 0.25,
+    iou_threshold: float = 0.65,
+    img_size: int = 416
+) -> np.ndarray:
+    """
+    Decodes multi-scale anchor outputs from YOLOv4-tiny DPU model.
+    scale_outputs: list of (layer_output, stride) where layer_output has shape (gh, gw, 255)
+    Returns: (K, 6) in [x1, y1, x2, y2, score, cls_id]
+    """
+    all_detections = []
+    num_classes = 80
+
+    for layer_output, stride in scale_outputs:
+        if layer_output.ndim == 4:
+            layer_output = layer_output[0]
+        gh, gw, _ = layer_output.shape
+        anchors = YOLOV4_TINY_ANCHORS.get(stride, [(10, 14), (23, 27), (37, 58)])
+        num_anchors = len(anchors)
+
+        pred = layer_output.reshape(gh, gw, num_anchors, 5 + num_classes)
+        obj_conf = sigmoid(pred[..., 4])
+        cls_conf = sigmoid(pred[..., 5:])
+
+        max_cls_ids = np.argmax(cls_conf, axis=-1)
+        max_cls_scores = np.max(cls_conf, axis=-1)
+        total_scores = obj_conf * max_cls_scores
+
+        mask = total_scores >= conf_threshold
+        if not np.any(mask):
+            continue
+
+        yv, xv = np.meshgrid(np.arange(gh, dtype=np.float32), np.arange(gw, dtype=np.float32), indexing="ij")
+        xv_tiled = np.repeat(xv[:, :, None], num_anchors, axis=2)[mask]
+        yv_tiled = np.repeat(yv[:, :, None], num_anchors, axis=2)[mask]
+
+        anchors_np = np.array(anchors, dtype=np.float32)
+        aw_tiled = np.tile(anchors_np[:, 0], (gh, gw, 1))[mask]
+        ah_tiled = np.tile(anchors_np[:, 1], (gh, gw, 1))[mask]
+
+        bx = (sigmoid(pred[..., 0][mask]) + xv_tiled) * stride
+        by = (sigmoid(pred[..., 1][mask]) + yv_tiled) * stride
+        bw = np.exp(np.clip(pred[..., 2][mask], -10.0, 10.0)) * aw_tiled
+        bh = np.exp(np.clip(pred[..., 3][mask], -10.0, 10.0)) * ah_tiled
+
+        x1 = np.clip(bx - bw * 0.5, 0.0, float(img_size))
+        y1 = np.clip(by - bh * 0.5, 0.0, float(img_size))
+        x2 = np.clip(bx + bw * 0.5, 0.0, float(img_size))
+        y2 = np.clip(by + bh * 0.5, 0.0, float(img_size))
+
+        cand_scores = total_scores[mask]
+        cand_cls = max_cls_ids[mask].astype(np.float32)
+
+        layer_boxes = np.stack([x1, y1, x2, y2, cand_scores, cand_cls], axis=-1)
+        all_detections.append(layer_boxes)
+
+    if not all_detections:
+        return np.empty((0, 6), dtype=np.float32)
+
+    dets_concat = np.concatenate(all_detections, axis=0)
+    keep_indices = nms(dets_concat[:, :4], dets_concat[:, 4], iou_threshold=iou_threshold)
+    if not keep_indices:
+        return np.empty((0, 6), dtype=np.float32)
+
+    return dets_concat[keep_indices]
+

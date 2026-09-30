@@ -33,7 +33,7 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from src.evaluation.yolo_decoder import postprocess_dpu_heads
+from src.evaluation.yolo_decoder import postprocess_dpu_heads, postprocess_yolov4_tiny_heads
 from src.evaluation.coco_eval import evaluate_predictions
 
 CSV_HEADER = [
@@ -259,16 +259,13 @@ def main():
             raise FileNotFoundError(f"Model not found: {model_path}")
 
     base_name = os.path.basename(model_path).lower()
-    is_leaky = "leaky" in base_name
-    if "yolov8n" in base_name or "yolo8n" in base_name:
-        model_tag = "yolov8n_leaky" if is_leaky else "yolov8n"
-        params_m = 3.157
-        total_ops_giga = 8.860
-    elif "yolo11m" in base_name:
-        model_tag = "yolo11m_leaky" if is_leaky else "yolo11m"
-        params_m = 20.08
-        total_ops_giga = 68.000
+    if "yolov4" in base_name:
+        model_tag = "yolov4_tiny"
+        is_leaky = True
+        params_m = 6.057
+        total_ops_giga = 6.900
     else:
+        is_leaky = "leaky" in base_name
         model_tag = "yolo11n_leaky" if is_leaky else "yolo11n"
         params_m = 2.624
         total_ops_giga = 6.610
@@ -384,53 +381,71 @@ def main():
                 r.wait(job_id)
 
             # C. Postprocessing (Decode + NMS)
-            # Find output heads (144 channels unified, or 64/80 separate)
-            scale_outputs = []
-            # 1. Unified 144-channel heads (LeakyReLU fused)
+            # 0. YOLOv4-tiny 255-channel heads (Anchor-based)
+            yolov4_heads = []
             for _, _, out_bufs, _, out_tensors in runner_pipelines:
                 for b_idx, tensor in enumerate(out_tensors):
                     dims = tensor.dims
-                    if len(dims) == 4 and dims[3] == 144:
+                    if len(dims) == 4 and dims[3] == 255:
                         gh = dims[1]
                         stride = height // gh
                         fixpos = tensor.get_attr("fix_point") or 0
                         scale = 2.0 ** (-fixpos)
                         buf_f = out_bufs[b_idx].astype(np.float32) * scale
-                        box_f = buf_f[..., :64]
-                        cls_f = buf_f[..., 64:]
-                        scale_outputs.append((box_f, cls_f, stride))
+                        yolov4_heads.append((buf_f, stride))
 
-            # 2. Separate 64/80 channel heads (SiLU unfused)
-            # Ensure we only pick TRUE detection heads (exactly 1 pair per spatial scale: 80, 40, 20)
-            if not scale_outputs:
-                box_heads = {}
-                cls_heads = {}
-                for _, _, out_bufs, sub_name, out_tensors in runner_pipelines:
-                    is_detect = "Detect" in sub_name or "cv2" in sub_name or "cv3" in sub_name
-                    for b_idx, tensor in enumerate(out_tensors):
-                        dims = tensor.dims
-                        t_name = tensor.name
-                        if len(dims) == 4:
-                            gh, ch = dims[1], dims[3]
-                            if gh in (height // 8, height // 16, height // 32):
-                                fixpos = tensor.get_attr("fix_point") or 0
-                                scale = 2.0 ** (-fixpos)
-                                if ch == 64 and ("cv2" in t_name or is_detect or gh not in box_heads):
-                                    box_heads[gh] = (out_bufs[b_idx].astype(np.float32) * scale, height // gh)
-                                elif ch == 80 and ("cv3" in t_name or is_detect or gh not in cls_heads):
-                                    cls_heads[gh] = out_bufs[b_idx].astype(np.float32) * scale
-
-                for gh in sorted(box_heads.keys(), reverse=True):
-                    if gh in cls_heads:
-                        buf_f, stride = box_heads[gh]
-                        cls_f = cls_heads[gh]
-                        scale_outputs.append((buf_f, cls_f, stride))
-
-            if scale_outputs:
-                preds = postprocess_dpu_heads(scale_outputs, conf_threshold=0.25, iou_threshold=0.65, img_size=width)
+            if yolov4_heads:
+                preds = postprocess_yolov4_tiny_heads(yolov4_heads, conf_threshold=0.25, iou_threshold=0.65, img_size=width)
                 all_predictions[stem] = preds
             else:
-                all_predictions[stem] = np.empty((0, 6), dtype=np.float32)
+                # Find output heads (144 channels unified, or 64/80 separate)
+                scale_outputs = []
+                # 1. Unified 144-channel heads (LeakyReLU fused)
+                for _, _, out_bufs, _, out_tensors in runner_pipelines:
+                    for b_idx, tensor in enumerate(out_tensors):
+                        dims = tensor.dims
+                        if len(dims) == 4 and dims[3] == 144:
+                            gh = dims[1]
+                            stride = height // gh
+                            fixpos = tensor.get_attr("fix_point") or 0
+                            scale = 2.0 ** (-fixpos)
+                            buf_f = out_bufs[b_idx].astype(np.float32) * scale
+                            box_f = buf_f[..., :64]
+                            cls_f = buf_f[..., 64:]
+                            scale_outputs.append((box_f, cls_f, stride))
+
+                # 2. Separate 64/80 channel heads (SiLU unfused)
+                # Ensure we only pick TRUE detection heads (exactly 1 pair per spatial scale: 80, 40, 20)
+                if not scale_outputs:
+                    box_heads = {}
+                    cls_heads = {}
+                    for _, _, out_bufs, sub_name, out_tensors in runner_pipelines:
+                        is_detect = "Detect" in sub_name or "cv2" in sub_name or "cv3" in sub_name
+                        for b_idx, tensor in enumerate(out_tensors):
+                            dims = tensor.dims
+                            t_name = tensor.name
+                            if len(dims) == 4:
+                                gh, ch = dims[1], dims[3]
+                                if gh in (height // 8, height // 16, height // 32):
+                                    fixpos = tensor.get_attr("fix_point") or 0
+                                    scale = 2.0 ** (-fixpos)
+                                    if ch == 64 and ("cv2" in t_name or is_detect or gh not in box_heads):
+                                        box_heads[gh] = (out_bufs[b_idx].astype(np.float32) * scale, height // gh)
+                                    elif ch == 80 and ("cv3" in t_name or is_detect or gh not in cls_heads):
+                                        cls_heads[gh] = out_bufs[b_idx].astype(np.float32) * scale
+
+                    for gh in sorted(box_heads.keys(), reverse=True):
+                        if gh in cls_heads:
+                            buf_f, stride = box_heads[gh]
+                            cls_f = cls_heads[gh]
+                            scale_outputs.append((buf_f, cls_f, stride))
+
+                if scale_outputs:
+                    preds = postprocess_dpu_heads(scale_outputs, conf_threshold=0.25, iou_threshold=0.65, img_size=width)
+                    all_predictions[stem] = preds
+                else:
+                    all_predictions[stem] = np.empty((0, 6), dtype=np.float32)
+
 
             t1 = time.perf_counter()
             latencies.append((t1 - t0) * 1000.0)
@@ -473,7 +488,7 @@ def main():
     print("\n" + "=" * 75)
     print(f"📊 RESULTADOS DEL BENCHMARK ({'END-TO-END' if args.mode == 'end2end' else 'HARDWARE DPU'})")
     print("=" * 75)
-    print(f"• Modelo:                {model_tag} ({'7 kernels DPU' if is_leaky else '110 kernels DPU'})")
+    print(f"• Modelo:                {model_tag} ({len(dpu_subgraphs)} kernel(s) DPU)")
     print(f"• Latencia Media:        {mean_lat:.2f} ms")
     print(f"• Latencia Mediana:      {median_lat:.2f} ms")
     print(f"• Latencia P95:          {p95_lat:.2f} ms")

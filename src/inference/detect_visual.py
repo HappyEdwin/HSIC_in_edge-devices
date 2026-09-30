@@ -135,7 +135,7 @@ def run_xmodel_inference(xmodel_path: str, image_path: str, img_size: int = 640)
     import time
     import xir
     import vart
-    from src.evaluation.yolo_decoder import postprocess_dpu_heads
+    from src.evaluation.yolo_decoder import postprocess_dpu_heads, postprocess_yolov4_tiny_heads
 
     t0 = time.perf_counter()
     graph = xir.Graph.deserialize(xmodel_path)
@@ -168,10 +168,14 @@ def run_xmodel_inference(xmodel_path: str, image_path: str, img_size: int = 640)
             if len(t.dims) == 4 and (t.dims[3] == 3 or t.dims[1] == 3):
                 input_runner_idx = r_idx
                 input_tensor_idx = t_idx
+                if t.dims[3] == 3:
+                    img_size = t.dims[2]
+                elif t.dims[1] == 3:
+                    img_size = t.dims[3]
                 fp = t.get_attr("fix_point")
                 if fp is not None:
                     input_scale = 2.0 ** fp
-                print(f"[*] Primary Input Runner #{r_idx} - Tensor: {t.name}, Shape: {t.dims}, Fixpos: {fp}")
+                print(f"[*] Primary Input Runner #{r_idx} - Tensor: {t.name}, Shape: {t.dims}, Fixpos: {fp}, Target ImgSize: {img_size}")
                 found_input = True
                 break
         if found_input:
@@ -197,6 +201,24 @@ def run_xmodel_inference(xmodel_path: str, image_path: str, img_size: int = 640)
         r.wait(jid)
 
     # Postprocess
+    # 0. Check for YOLOv4-tiny 255-channel heads
+    yolov4_heads = []
+    for _, _, out_bufs, out_tensors in runners:
+        for b_idx, tensor in enumerate(out_tensors):
+            dims = tensor.dims
+            if len(dims) == 4 and dims[3] == 255:
+                gh = dims[1]
+                stride = img_size // gh
+                fp = tensor.get_attr("fix_point") or 0
+                scale = 2.0 ** (-fp)
+                buf_f = out_bufs[b_idx].astype(np.float32) * scale
+                yolov4_heads.append((buf_f, stride))
+
+    if yolov4_heads:
+        preds = postprocess_yolov4_tiny_heads(yolov4_heads, conf_threshold=0.25, iou_threshold=0.65, img_size=img_size)
+        t1 = time.perf_counter()
+        return preds, (t1 - t0) * 1000.0
+
     scale_outputs = []
     # 1. Check for unified 144-channel heads first (LeakyReLU fused xmodel)
     for _, _, out_bufs, out_tensors in runners:
@@ -257,7 +279,7 @@ def main():
     parser.add_argument("--image", type=str, default="data/coco128/images/train2017/000000000009.jpg", help="Path to input test image")
     parser.add_argument("--model-fp32", type=str, default="models/weights/yolo11n.pt", help="PyTorch FP32 model")
     parser.add_argument("--model-fp16", type=str, default="models/engines/yolo11n_640_fp16.engine", help="TensorRT FP16 engine")
-    parser.add_argument("--model-int8", type=str, default="models/xmodel/yolo11n_leaky_kv260.xmodel", help="INT8 model (xmodel or engine)")
+    parser.add_argument("--model-int8", type=str, default="models/xmodel/yolov4_tiny_kv260.xmodel", help="INT8 model (xmodel or engine)")
     parser.add_argument("--output-dir", type=str, default="results/detections", help="Output directory for annotated images")
     parser.add_argument("--conf", type=float, default=0.25, help="Confidence threshold")
     parser.add_argument("--imgsz", type=int, default=640, help="Image size")
