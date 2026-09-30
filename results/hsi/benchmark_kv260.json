@@ -1,0 +1,16 @@
+{
+    "platform": "AMD Kria KV260",
+    "model_name": "SS-ResNet",
+    "precision": "INT8",
+    "dataset": "Indian",
+    "latency_mean_ms": 0.318,
+    "latency_median_ms": 0.316,
+    "latency_p95_ms": 0.329,
+    "fps": 3140.14,
+    "power_avg_w": 6.706,
+    "energy_mj_per_patch": 2.136,
+    "overall_accuracy_oa": 98.31,
+    "average_accuracy_aa": 97.61,
+    "kappa": 98.07,
+    "ram_rss_mb": 467.73
+}
