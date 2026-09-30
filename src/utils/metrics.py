@@ -240,24 +240,32 @@ def save_benchmark_result(result_data: Dict[str, Any], results_dir: str = "resul
     csv_path = os.path.join(results_dir, "benchmark_summary.csv")
     file_exists = os.path.isfile(csv_path)
 
-    # Campos principales para el CSV comparativo
+    power_avg = float(result_data.get("power_avg_watts", 0.0))
+    lat_mean = float(result_data.get("latency_mean_ms", 0.0))
+    energy_mj = round(lat_mean * power_avg, 2)
+    activation = result_data.get("activation", "leaky" if "leaky" in model_name else "silu")
+
+    # Campos principales para el CSV comparativo (Esquema Unificado Oficial)
     csv_row = {
         "timestamp": timestamp,
         "model_name": model_name,
         "platform": platform,
         "precision": precision,
+        "activation": activation,
+        "mode": result_data.get("mode", "end2end"),
         "input_resolution": result_data.get("input_resolution", "640x640"),
-        "params_m": result_data.get("params_m", 0.0),
-        "gflops": result_data.get("gflops", 0.0),
+        "params_m": result_data.get("params_m", 2.624),
+        "total_ops_giga": result_data.get("total_ops_giga", result_data.get("gflops", 6.61)),
         "mAP50": result_data.get("mAP50", 0.0),
         "mAP50_95": result_data.get("mAP50_95", 0.0),
-        "latency_mean_ms": result_data.get("latency_mean_ms", 0.0),
+        "latency_mean_ms": lat_mean,
         "latency_median_ms": result_data.get("latency_median_ms", 0.0),
         "latency_p95_ms": result_data.get("latency_p95_ms", 0.0),
         "fps": result_data.get("fps", 0.0),
         "peak_vram_mb": result_data.get("peak_vram_mb", 0.0),
-        "power_avg_watts": result_data.get("power_avg_watts", 0.0),
-        "unaccelerated_layers": result_data.get("unaccelerated_layers_count", 0),
+        "power_avg_watts": power_avg,
+        "power_max_watts": result_data.get("power_max_watts", 0.0),
+        "energy_mj_per_frame": energy_mj,
     }
 
     with open(csv_path, "a", newline="", encoding="utf-8") as f:

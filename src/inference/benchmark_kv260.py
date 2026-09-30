@@ -41,9 +41,11 @@ CSV_HEADER = [
     "model_name",
     "platform",
     "precision",
+    "activation",
+    "mode",
     "input_resolution",
     "params_m",
-    "gflops",
+    "total_ops_giga",
     "mAP50",
     "mAP50_95",
     "latency_mean_ms",
@@ -52,7 +54,8 @@ CSV_HEADER = [
     "fps",
     "peak_vram_mb",
     "power_avg_watts",
-    "unaccelerated_layers",
+    "power_max_watts",
+    "energy_mj_per_frame",
 ]
 
 class KriaPowerMonitor:
@@ -225,8 +228,8 @@ def preprocess_image(image_path: str, target_shape=(640, 640), fix_scale=1.0) ->
 
 def main():
     parser = argparse.ArgumentParser(description="Kria KV260 VART Benchmark & Telemetry")
-    parser.add_argument("--model", type=str, default="models/xmodel/yolo11m_leaky_kv260.xmodel", help="Path to compiled .xmodel")
-    parser.add_argument("--mode", type=str, default="hardware", choices=["hardware", "end2end"], help="Benchmark mode: hardware (DPU only) or end2end (Pre+DPU+NMS)")
+    parser.add_argument("--model", type=str, default="models/xmodel/yolo11n_leaky_kv260.xmodel", help="Path to compiled .xmodel")
+    parser.add_argument("--mode", type=str, default="end2end", choices=["hardware", "end2end"], help="Benchmark mode: hardware (DPU only) or end2end (Pre+DPU+NMS)")
     parser.add_argument("--data-dir", type=str, default="data/coco128/images/train2017", help="Dataset directory")
     parser.add_argument("--iterations", type=int, default=100, help="Benchmark iterations")
     parser.add_argument("--warmup", type=int, default=10, help="Warmup iterations")
@@ -235,8 +238,7 @@ def main():
 
     model_path = os.path.abspath(args.model)
     if not os.path.exists(model_path):
-        # Fallback to standard model if leaky not yet synced
-        fallback = "models/xmodel/yolo11m_kv260.xmodel"
+        fallback = "models/xmodel/yolo11n_kv260.xmodel"
         if os.path.exists(fallback):
             print(f"[-] Requested {model_path} not found. Falling back to {fallback}")
             model_path = os.path.abspath(fallback)
@@ -244,7 +246,7 @@ def main():
             raise FileNotFoundError(f"Model not found: {model_path}")
 
     is_leaky = "leaky" in os.path.basename(model_path)
-    model_tag = "yolo11m_leaky" if is_leaky else "yolo11m"
+    model_tag = "yolo11n_leaky" if is_leaky else "yolo11n"
     ram_initial = get_process_ram_mb()
 
     print("=" * 75)
@@ -417,14 +419,18 @@ def main():
 
     # 9. Save JSON & CSV
     timestamp = int(time.time())
+    energy_mj = round(mean_lat * power_stats["power_avg_watts"], 2)
+    activation_str = "leaky" if is_leaky else "silu"
+
     result_data = {
         "model_name": model_tag,
         "platform": "kria_kv260",
         "precision": "int8",
+        "activation": activation_str,
         "mode": args.mode,
         "input_resolution": f"{width}x{height}",
-        "params_m": 20.09,
-        "gflops": 68.0,
+        "params_m": 2.624,
+        "total_ops_giga": 6.610,
         "latency_mean_ms": round(mean_lat, 2),
         "latency_median_ms": round(median_lat, 2),
         "latency_p95_ms": round(p95_lat, 2),
@@ -434,6 +440,7 @@ def main():
         "peak_vram_mb": peak_vram_mb,
         "power_avg_watts": power_stats["power_avg_watts"],
         "power_max_watts": power_stats["power_max_watts"],
+        "energy_mj_per_frame": energy_mj,
         "mAP50": map50,
         "mAP50_95": map50_95,
         "samples_evaluated": len(latencies),
@@ -451,9 +458,11 @@ def main():
         "model_name": model_tag,
         "platform": "kria_kv260",
         "precision": "int8",
+        "activation": activation_str,
+        "mode": args.mode,
         "input_resolution": f"{width}x{height}",
-        "params_m": 20.09,
-        "gflops": 68.0,
+        "params_m": 2.624,
+        "total_ops_giga": 6.610,
         "mAP50": map50,
         "mAP50_95": map50_95,
         "latency_mean_ms": round(mean_lat, 2),
@@ -462,7 +471,8 @@ def main():
         "fps": round(fps, 2),
         "peak_vram_mb": peak_vram_mb,
         "power_avg_watts": power_stats["power_avg_watts"],
-        "unaccelerated_layers": 0,
+        "power_max_watts": power_stats["power_max_watts"],
+        "energy_mj_per_frame": energy_mj,
     }
 
     os.makedirs(os.path.dirname(args.output_csv), exist_ok=True)

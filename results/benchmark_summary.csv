@@ -1,6 +1,2 @@
-timestamp,model_name,platform,precision,input_resolution,params_m,gflops,mAP50,mAP50_95,latency_mean_ms,latency_median_ms,latency_p95_ms,fps,peak_vram_mb,power_avg_watts,unaccelerated_layers
-1790274994,yolo11n,jetson_orin_nano,fp16,640x640,2.624,6.61,0.6758,0.5052,29.08,28.4,33.97,34.39,13.24,5.513,0
-1790277127,yolo11m,jetson_orin_nano,int8,640x640,20.09,68.0,0.7269,0.5625,41.18,40.44,46.5,24.28,13.24,6.169,0
-1790717506,yolo11m,kria_kv260,int8,640x640,20.09,68.0,0.72,0.558,198.38,198.2,200.61,5.04,188.75,6.418,0
-1790717524,yolo11m_leaky,kria_kv260,int8,640x640,20.09,68.0,0.72,0.558,107.12,107.11,107.78,9.34,108.34,7.791,0
-1790717544,yolo11m_leaky_e2e,kria_kv260,int8,640x640,20.09,68.0,0.72,0.558,168.84,167.27,176.48,5.92,108.33,7.567,0
+timestamp,model_name,platform,precision,activation,mode,input_resolution,params_m,total_ops_giga,mAP50,mAP50_95,latency_mean_ms,latency_median_ms,latency_p95_ms,fps,peak_vram_mb,power_avg_watts,power_max_watts,energy_mj_per_frame
+1790274994,yolo11n,jetson_orin_nano,fp16,silu,end2end,640x640,2.624,6.610,0.6758,0.5052,29.08,28.40,33.97,34.39,13.24,5.513,6.389,160.32
