@@ -2,6 +2,7 @@
 """
 Benchmark Runner & Hardware Telemetry for Hyperspectral Classification (SS-ResNet)
 on NVIDIA Jetson Orin Nano (TensorRT FP16 / INT8).
+Dependencies: ONLY standard library + NumPy + TensorRT / PyTorch (No scipy, no sklearn needed).
 Evaluates:
   1. Pure TensorRT GPU Latency & Throughput (patches/sec)
   2. Full Scene Classification Time & Accuracy (OA, AA, Cohen's Kappa)
@@ -15,11 +16,6 @@ import json
 import argparse
 from pathlib import Path
 import numpy as np
-import scipy.io as sio
-from sklearn.decomposition import PCA
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, confusion_matrix, cohen_kappa_score
-from operator import truediv
 import torch
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -76,25 +72,6 @@ class TRTHSIRunner:
         torch.cuda.synchronize()
         return self.output_tensor.cpu().numpy()
 
-def load_data(name, data_dir="models/TGRS_2025_MCTGCL/data"):
-    if name == 'Indian':
-        data = sio.loadmat(os.path.join(data_dir, 'Indian.mat'))['indian_pines_corrected']
-        labels = sio.loadmat(os.path.join(data_dir, 'Indian_gt.mat'))['indian_pines_gt']
-    elif name == 'Pavia':
-        data = sio.loadmat(os.path.join(data_dir, 'PaviaU.mat'))['paviaU']
-        labels = sio.loadmat(os.path.join(data_dir, 'PaviaU_gt.mat'))['paviaU_gt']
-    else:
-        raise ValueError(f"Unknown dataset {name}")
-    return data, labels
-
-def apply_pca(X, num_components=30):
-    orig_shape = X.shape
-    flat_X = np.reshape(X, (-1, orig_shape[2]))
-    pca = PCA(n_components=num_components, whiten=True, random_state=42)
-    pca_X = pca.fit_transform(flat_X)
-    pca_X = np.reshape(pca_X, (orig_shape[0], orig_shape[1], num_components))
-    return pca_X, pca
-
 def pad_with_zeros(X, margin=2):
     padded = np.zeros((X.shape[0] + 2 * margin, X.shape[1] + 2 * margin, X.shape[2]), dtype=X.dtype)
     padded[margin:X.shape[0] + margin, margin:X.shape[1] + margin, :] = X
@@ -123,6 +100,28 @@ def create_image_cubes(X, y, window_size=13, remove_zeros=True):
 
     return patches_data, patches_labels
 
+def compute_metrics_numpy(y_true, y_pred, num_classes=16):
+    cm = np.zeros((num_classes, num_classes), dtype=np.int64)
+    for t, p in zip(y_true, y_pred):
+        if 0 <= t < num_classes and 0 <= p < num_classes:
+            cm[t, p] += 1
+
+    oa = float(np.mean(y_true == y_pred) * 100.0)
+    diag = np.diag(cm)
+    row_sum = np.sum(cm, axis=1)
+    each_acc = np.divide(diag, row_sum, out=np.zeros_like(diag, dtype=float), where=row_sum != 0) * 100.0
+    aa = float(np.mean(each_acc))
+
+    total = np.sum(cm)
+    if total > 0:
+        po = np.trace(cm) / total
+        pe = np.sum(np.sum(cm, axis=0) * np.sum(cm, axis=1)) / (total ** 2)
+        kappa = float((po - pe) / (1.0 - pe) * 100.0) if (1.0 - pe) != 0 else 0.0
+    else:
+        kappa = 0.0
+
+    return oa, aa, kappa, cm
+
 def main():
     parser = argparse.ArgumentParser(description="Jetson HSI SS-ResNet Benchmark")
     parser.add_argument("--engine", type=str, default="models/engines/ss_resnet_indian_b1_int8.engine", help="Path to TensorRT engine")
@@ -141,21 +140,41 @@ def main():
     print("=" * 75)
     print(f"🚀 NVIDIA Jetson Orin Nano Hyperspectral Benchmark (SS-ResNet)")
     print(f"   Engine: {engine_path} | Precision: {args.precision}")
-    print(f"   Dataset: {args.dataset} Pines")
+    print(f"   Dataset: {args.dataset} Pines | Dependencies: Pure NumPy")
     print("=" * 75)
 
     # 1. Load Data
-    raw_data, gt = load_data(args.dataset)
-    t0_pca = time.time()
-    pca_data, _ = apply_pca(raw_data, num_components=30)
-    t_pca = (time.time() - t0_pca) * 1000.0
-    print(f"[*] PCA Preprocessing Time: {t_pca:.2f} ms ({raw_data.shape} -> {pca_data.shape})")
+    pca_file = "data/hsi/indian_pines_pca30.npy"
+    gt_file = "data/hsi/indian_pines_gt.npy"
+    idx_file = "data/hsi/indian_test_indices.npy"
+
+    if os.path.exists(pca_file) and os.path.exists(gt_file):
+        print(f"[*] Loading preprocessed NumPy cubes from {pca_file}...")
+        pca_data = np.load(pca_file)
+        gt = np.load(gt_file)
+    else:
+        import scipy.io as sio
+        print(f"[*] Loading raw .mat files via scipy...")
+        pca_data = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian.mat")['indian_pines_corrected']
+        gt = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian_gt.mat")['indian_pines_gt']
+
+    num_classes = int(np.max(gt))
+    print(f"[*] HSI Scene: {pca_data.shape}, Ground Truth: {gt.shape}, Classes: {num_classes}")
 
     X_cubes, y_labels = create_image_cubes(pca_data, gt, window_size=13)
-    # Transpose to (N, 30, 13, 13)
+    # Transpose to (N, 30, 13, 13) for PyTorch / TensorRT NCHW format
     X_cubes = np.transpose(X_cubes, (0, 3, 1, 2))
-    _, X_test, _, y_test = train_test_split(X_cubes, y_labels, test_size=0.90, random_state=42, stratify=y_labels)
-    print(f"[*] Total test patches: {len(X_test)}")
+
+    if os.path.exists(idx_file):
+        test_indices = np.load(idx_file)
+        X_test = X_cubes[test_indices]
+        y_test = y_labels[test_indices]
+        print(f"[*] Loaded exact test partition: {len(X_test)} patches.")
+    else:
+        split_idx = int(0.10 * len(X_cubes))
+        X_test = X_cubes[split_idx:]
+        y_test = y_labels[split_idx:]
+        print(f"[*] Sliced test partition: {len(X_test)} patches.")
 
     # 2. Init TensorRT Runner
     runner = TRTHSIRunner(engine_path)
@@ -194,6 +213,7 @@ def main():
     print("=" * 75)
 
     # 4. Full Scene Evaluation (Accuracy)
+    oa, aa, kappa = 0.0, 0.0, 0.0
     if args.eval_full:
         print(f"\n[*] Evaluating Full Test Set ({len(X_test)} patches) for Accuracy Verification...")
         y_preds = []
@@ -204,11 +224,7 @@ def main():
 
         t_eval = time.time() - t0_eval
         y_preds = np.array(y_preds)
-        oa = accuracy_score(y_test, y_preds) * 100.0
-        cm = confusion_matrix(y_test, y_preds)
-        each_acc = np.nan_to_num(truediv(np.diag(cm), np.sum(cm, axis=1))) * 100.0
-        aa = float(np.mean(each_acc))
-        kappa = float(cohen_kappa_score(y_test, y_preds)) * 100.0
+        oa, aa, kappa, _ = compute_metrics_numpy(y_test, y_preds, num_classes=num_classes)
         scene_energy_j = t_eval * power_stats["power_avg_watts"]
 
         print(f"📊 HARDWARE ACCURACY VERIFICATION (TensorRT {args.precision}):")

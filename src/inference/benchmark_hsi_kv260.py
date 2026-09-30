@@ -2,6 +2,7 @@
 """
 Benchmark Runner & Hardware Telemetry for Hyperspectral Classification (SS-ResNet)
 on AMD-Xilinx Kria KV260 (DPUCZDX8G Vitis AI Runtime).
+Dependencies: ONLY standard library + NumPy + VART / XIR (No scipy, no sklearn needed).
 Evaluates:
   1. Pure Silicon DPU Latency & Throughput (patches/sec)
   2. Full Scene Classification Time & Accuracy (OA, AA, Cohen's Kappa)
@@ -16,11 +17,6 @@ import argparse
 import threading
 import glob
 import numpy as np
-import scipy.io as sio
-from sklearn.decomposition import PCA
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, confusion_matrix, cohen_kappa_score
-from operator import truediv
 
 try:
     import xir
@@ -110,25 +106,6 @@ def get_process_ram_mb():
         pass
     return res
 
-def load_data(name, data_dir="models/TGRS_2025_MCTGCL/data"):
-    if name == 'Indian':
-        data = sio.loadmat(os.path.join(data_dir, 'Indian.mat'))['indian_pines_corrected']
-        labels = sio.loadmat(os.path.join(data_dir, 'Indian_gt.mat'))['indian_pines_gt']
-    elif name == 'Pavia':
-        data = sio.loadmat(os.path.join(data_dir, 'PaviaU.mat'))['paviaU']
-        labels = sio.loadmat(os.path.join(data_dir, 'PaviaU_gt.mat'))['paviaU_gt']
-    else:
-        raise ValueError(f"Unknown dataset {name}")
-    return data, labels
-
-def apply_pca(X, num_components=30):
-    orig_shape = X.shape
-    flat_X = np.reshape(X, (-1, orig_shape[2]))
-    pca = PCA(n_components=num_components, whiten=True, random_state=42)
-    pca_X = pca.fit_transform(flat_X)
-    pca_X = np.reshape(pca_X, (orig_shape[0], orig_shape[1], num_components))
-    return pca_X, pca
-
 def pad_with_zeros(X, margin=2):
     padded = np.zeros((X.shape[0] + 2 * margin, X.shape[1] + 2 * margin, X.shape[2]), dtype=X.dtype)
     padded[margin:X.shape[0] + margin, margin:X.shape[1] + margin, :] = X
@@ -156,6 +133,29 @@ def create_image_cubes(X, y, window_size=13, remove_zeros=True):
         patches_labels = patches_labels[mask] - 1
 
     return patches_data, patches_labels
+
+def compute_metrics_numpy(y_true, y_pred, num_classes=16):
+    """Computes OA, AA, and Cohen's Kappa using pure NumPy (no sklearn needed)."""
+    cm = np.zeros((num_classes, num_classes), dtype=np.int64)
+    for t, p in zip(y_true, y_pred):
+        if 0 <= t < num_classes and 0 <= p < num_classes:
+            cm[t, p] += 1
+
+    oa = float(np.mean(y_true == y_pred) * 100.0)
+    diag = np.diag(cm)
+    row_sum = np.sum(cm, axis=1)
+    each_acc = np.divide(diag, row_sum, out=np.zeros_like(diag, dtype=float), where=row_sum != 0) * 100.0
+    aa = float(np.mean(each_acc))
+
+    total = np.sum(cm)
+    if total > 0:
+        po = np.trace(cm) / total
+        pe = np.sum(np.sum(cm, axis=0) * np.sum(cm, axis=1)) / (total ** 2)
+        kappa = float((po - pe) / (1.0 - pe) * 100.0) if (1.0 - pe) != 0 else 0.0
+    else:
+        kappa = 0.0
+
+    return oa, aa, kappa, cm
 
 def get_dpu_subgraphs(graph):
     root_subgraph = graph.get_root_subgraph()
@@ -195,20 +195,42 @@ def main():
     print(f"🚀 Kria KV260 Hyperspectral Benchmark (SS-ResNet)")
     print(f"   Model: {model_path}")
     print(f"   Dataset: {args.dataset} Pines | Architecture: 1 Unified DPU Kernel")
+    print(f"   Dependencies: 100% Pure NumPy (Zero scipy/sklearn required)")
     print("=" * 75)
 
-    # 1. Load Data
-    raw_data, gt = load_data(args.dataset)
-    num_classes = len(np.unique(gt)) - 1
-    t0_pca = time.time()
-    pca_data, _ = apply_pca(raw_data, num_components=30)
-    t_pca = (time.time() - t0_pca) * 1000.0
-    print(f"[*] PCA Preprocessing Time: {t_pca:.2f} ms ({raw_data.shape} -> {pca_data.shape})")
+    # 1. Load Data from pure NumPy files
+    pca_file = "data/hsi/indian_pines_pca30.npy"
+    gt_file = "data/hsi/indian_pines_gt.npy"
+    idx_file = "data/hsi/indian_test_indices.npy"
 
+    if os.path.exists(pca_file) and os.path.exists(gt_file):
+        print(f"[*] Loading preprocessed NumPy cubes from {pca_file}...")
+        pca_data = np.load(pca_file)
+        gt = np.load(gt_file)
+    else:
+        # Fallback to scipy if available
+        import scipy.io as sio
+        print(f"[*] Loading raw .mat files via scipy...")
+        pca_data = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian.mat")['indian_pines_corrected']
+        gt = sio.loadmat("models/TGRS_2025_MCTGCL/data/Indian_gt.mat")['indian_pines_gt']
+
+    num_classes = int(np.max(gt))
+    print(f"[*] HSI Scene: {pca_data.shape}, Ground Truth: {gt.shape}, Classes: {num_classes}")
+
+    print("[*] Extracting 13x13 spatial-spectral patches...")
     X_cubes, y_labels = create_image_cubes(pca_data, gt, window_size=13)
-    # Split identically to training (10% train, 90% test)
-    _, X_test, _, y_test = train_test_split(X_cubes, y_labels, test_size=0.90, random_state=42, stratify=y_labels)
-    print(f"[*] Total test patches for evaluation: {len(X_test)}")
+
+    if os.path.exists(idx_file):
+        test_indices = np.load(idx_file)
+        X_test = X_cubes[test_indices]
+        y_test = y_labels[test_indices]
+        print(f"[*] Loaded exact test partition: {len(X_test)} patches.")
+    else:
+        # Fallback: slice 90%
+        split_idx = int(0.10 * len(X_cubes))
+        X_test = X_cubes[split_idx:]
+        y_test = y_labels[split_idx:]
+        print(f"[*] Sliced test partition: {len(X_test)} patches.")
 
     # 2. Initialize VART Runner
     graph = xir.Graph.deserialize(model_path)
@@ -228,7 +250,7 @@ def main():
     in_fixpos = in_tensor.get_attr("fix_point")
     out_fixpos = out_tensor.get_attr("fix_point")
     in_scale = 2 ** in_fixpos
-    out_scale = 1 / (2 ** out_fixpos)
+    out_scale = 1.0 / (2 ** out_fixpos)
 
     print(f"[*] DPU Input Shape: {in_shape}, FixPos: {in_fixpos} (Scale: {in_scale})")
     print(f"[*] DPU Output Shape: {out_shape}, FixPos: {out_fixpos} (Scale: {out_scale})")
@@ -238,7 +260,7 @@ def main():
     if in_shape == (1, 13, 13, 30):
         test_patches_dpu = [np.round(X_test[i:i+1] * in_scale).clip(-128, 127).astype(np.int8) for i in range(len(X_test))]
     else:
-        # NCHW fallback
+        # NCHW fallback: (1, 30, 13, 13)
         transposed = np.transpose(X_test, (0, 3, 1, 2))
         test_patches_dpu = [np.round(transposed[i:i+1] * in_scale).clip(-128, 127).astype(np.int8) for i in range(len(X_test))]
 
@@ -249,7 +271,7 @@ def main():
     print(f"\n[*] Running Pure DPU Latency Benchmark ({args.iterations} iterations)...")
     latencies_ms = []
     # Warmup
-    for _ in range(20):
+    for _ in range(25):
         out_buf = np.empty(out_shape, dtype=np.int8)
         job_id = dpu_runner.execute_async([test_patches_dpu[0]], [out_buf])
         dpu_runner.wait(job_id)
@@ -283,6 +305,7 @@ def main():
     print("=" * 75)
 
     # 5. Full Scene Evaluation (Accuracy)
+    oa, aa, kappa = 0.0, 0.0, 0.0
     if args.eval_full:
         print(f"\n[*] Evaluating Full Test Set ({len(test_patches_dpu)} patches) for Accuracy Verification...")
         y_preds = []
@@ -296,11 +319,7 @@ def main():
 
         t_eval = time.time() - t0_eval
         y_preds = np.array(y_preds)
-        oa = accuracy_score(y_test, y_preds) * 100.0
-        cm = confusion_matrix(y_test, y_preds)
-        each_acc = np.nan_to_num(truediv(np.diag(cm), np.sum(cm, axis=1))) * 100.0
-        aa = float(np.mean(each_acc))
-        kappa = float(cohen_kappa_score(y_test, y_preds)) * 100.0
+        oa, aa, kappa, _ = compute_metrics_numpy(y_test, y_preds, num_classes=num_classes)
         scene_energy_j = (t_eval * power_stats["power_avg_watts"])
 
         print(f"📊 HARDWARE ACCURACY VERIFICATION (DPU INT8):")
