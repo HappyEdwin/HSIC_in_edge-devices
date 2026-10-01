@@ -357,15 +357,23 @@ def main():
         t_eval = time.time() - t0_eval
         y_preds = np.array(y_preds)
         oa, aa, kappa, _ = compute_metrics_numpy(y_test, y_preds, num_classes=num_classes)
-        scene_energy_j = (t_eval * power_stats["power_avg_watts"])
+        scene_total_time_s = round((t_pca_ms + t_patch_ms) / 1000.0 + t_eval, 3)
+        scene_total_energy_j = round(scene_total_time_s * power_stats["power_avg_watts"], 3)
+        scene_pixels = len(test_patches_dpu)
 
         print(f"📊 HARDWARE ACCURACY VERIFICATION (DPU INT8):")
         print(f"   Overall Accuracy (OA): {oa:.2f} %")
         print(f"   Average Accuracy (AA): {aa:.2f} %")
         print(f"   Kappa Coefficient (κ): {kappa:.2f} %")
         print(f"   Full Test Classification Time: {t_eval:.2f} s ({len(test_patches_dpu)/t_eval:.1f} patches/s)")
-        print(f"   Total Energy for Scene: {scene_energy_j:.2f} J")
+        print(f"   Total Scene End-to-End Time: {scene_total_time_s:.2f} s")
+        print(f"   Total Energy for Scene: {scene_total_energy_j:.2f} J")
         print("=" * 75)
+    else:
+        scene_total_time_s = None
+        scene_total_energy_j = None
+        scene_pixels = None
+        t_eval = None
 
     ram = get_process_ram_mb()
     results = {
@@ -381,6 +389,10 @@ def main():
         "fps": round(fps, 2),
         "power_avg_w": power_stats["power_avg_watts"],
         "energy_mj_per_patch": round(energy_mj, 3),
+        "scene_pixels_count": scene_pixels,
+        "scene_inference_time_s": round(t_eval, 3) if t_eval is not None else None,
+        "scene_total_time_s": scene_total_time_s,
+        "scene_energy_joules": scene_total_energy_j,
         "overall_accuracy_oa": round(oa, 2) if args.eval_full else None,
         "average_accuracy_aa": round(aa, 2) if args.eval_full else None,
         "kappa": round(kappa, 2) if args.eval_full else None,
