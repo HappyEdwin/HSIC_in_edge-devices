@@ -1,0 +1,3 @@
+platform,model_name,precision,dataset,pca_latency_ms,patch_extraction_latency_ms,latency_mean_ms,latency_median_ms,latency_p95_ms,fps,power_avg_w,energy_mj_per_patch,scene_pixels_count,scene_inference_time_s,scene_total_time_s,scene_energy_joules,overall_accuracy_oa,average_accuracy_aa,kappa,ram_rss_mb
+AMD Kria KV260,SS-ResNet,INT8,Indian,1240.51,1648.85,0.327,0.317,0.362,3057.97,6.664,2.179,9225,3.486,6.376,42.490,98.30,97.60,98.06,483.94
+NVIDIA Jetson Orin Nano,SS-ResNet,INT8,Indian,17.10,183.44,0.559,0.556,0.579,1787.91,6.074,3.397,9225,5.515,5.715,34.713,98.33,97.81,98.10,956.70
