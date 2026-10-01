@@ -1,8 +1,8 @@
 {
     "lib": "libvart-dpu-runner.so",
-    "filename": "yolov4_tiny_kv260.xmodel",
+    "filename": "ss_resnet_indian_kv260.xmodel",
     "kernel": [
-        "subgraph_YoloBody__YoloBody_BasicConv_conv_for_P5__Conv2d_conv__ret_123"
+        "subgraph_SSResNet__SSResNet_AvgPool2d_pool__1679_fix"
     ],
     "target": "DPUCZDX8G_ISA1_B3136_0101000016010406"
 }

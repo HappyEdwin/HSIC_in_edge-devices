@@ -255,7 +255,8 @@ def main():
         for i in range(len(X_test)):
             out = runner.infer(X_test[i:i+1])
             y_preds.append(int(np.argmax(out.reshape(-1))))
-
+        t_eval = time.time() - t0_eval
+        y_preds = np.array(y_preds)
         oa, aa, kappa, _ = compute_metrics_numpy(y_test, y_preds, num_classes=num_classes)
         scene_total_time_s = round((t_pca_ms + t_patch_ms) / 1000.0 + t_eval, 3)
         scene_total_energy_j = round(scene_total_time_s * power_stats["power_avg_watts"], 3)

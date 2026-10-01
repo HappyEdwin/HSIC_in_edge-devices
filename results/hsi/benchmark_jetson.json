@@ -11,7 +11,12 @@
     "fps": 1568.63,
     "power_avg_w": 5.908,
     "energy_mj_per_patch": 3.766,
+    "scene_pixels_count": 10249,
+    "scene_inference_time_s": 6.53,
+    "scene_total_time_s": 6.73,
+    "scene_energy_joules": 39.76,
     "overall_accuracy_oa": 98.33,
     "average_accuracy_aa": 97.81,
-    "kappa": 98.1
+    "kappa": 98.10,
+    "ram_rss_mb": 512.40
 }
