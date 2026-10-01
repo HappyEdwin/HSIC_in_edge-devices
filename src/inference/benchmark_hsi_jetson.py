@@ -294,11 +294,25 @@ def main():
         return res
 
     ram = get_process_ram_mb()
+    model_size = round(os.path.getsize(engine_path) / (1024 * 1024), 2)
+    scene_ops_giga = round(scene_pixels * 0.0637, 2) if scene_pixels else None
+    effective_throughput_gops = round(fps * 0.06366, 2)
+    energy_eff_gops_w = round(effective_throughput_gops / power_stats["power_avg_watts"], 2) if power_stats["power_avg_watts"] > 0 else 0.0
     results = {
         "platform": "NVIDIA Jetson Orin Nano",
         "model_name": "SS-ResNet",
         "precision": args.precision,
         "dataset": args.dataset,
+        "input_resolution": "13x13x30",
+        "params_m": 0.636,
+        "total_params": 635664,
+        "model_size_mb": model_size,
+        "total_ops_giga": 0.0637,
+        "gflops": 0.0637,
+        "total_macs_m": 31.83,
+        "gmacs": 0.0318,
+        "effective_throughput_gops": effective_throughput_gops,
+        "energy_efficiency_gops_per_watt": energy_eff_gops_w,
         "pca_latency_ms": round(t_pca_ms, 2),
         "patch_extraction_latency_ms": round(t_patch_ms, 2),
         "latency_mean_ms": round(mean_lat, 3),
@@ -311,6 +325,7 @@ def main():
         "scene_inference_time_s": round(t_eval, 3) if t_eval is not None else None,
         "scene_total_time_s": scene_total_time_s,
         "scene_energy_joules": scene_total_energy_j,
+        "scene_total_ops_giga": scene_ops_giga,
         "overall_accuracy_oa": round(oa, 2) if args.eval_full else None,
         "average_accuracy_aa": round(aa, 2) if args.eval_full else None,
         "kappa": round(kappa, 2) if args.eval_full else None,
