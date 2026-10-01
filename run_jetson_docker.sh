@@ -52,11 +52,13 @@ if [[ "$*" == *"--hsi"* ]] || [[ "$1" == "hsi" ]]; then
         --engine "$HSI_ENGINE" \
         --precision INT8 \
         --dataset Indian \
-        --iterations 1000
+        --iterations 1000 \
+        --eval_full
 
     echo ""
     echo "🎉 Benchmark Hiperespectral completado exitosamente!"
     echo "Resultados registrados en: results/hsi/benchmark_jetson.json"
+    echo "Arreglos de predicción en: results/hsi/predictions_jetson.npy y classification_map_jetson.npy"
     exit 0
 fi
 
