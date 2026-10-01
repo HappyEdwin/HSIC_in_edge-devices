@@ -150,6 +150,7 @@ def create_image_cubes(X, y, window_size=13, remove_zeros=True):
     total_pixels = h * w
     patches_data = np.zeros((total_pixels, window_size, window_size, c), dtype=np.float32)
     patches_labels = np.zeros(total_pixels, dtype=np.int64)
+    patches_coords = np.zeros((total_pixels, 2), dtype=np.int64)
 
     idx = 0
     for r in range(margin, zero_padded.shape[0] - margin):
@@ -157,14 +158,16 @@ def create_image_cubes(X, y, window_size=13, remove_zeros=True):
             patch = zero_padded[r - margin:r + margin + 1, col - margin:col + margin + 1, :]
             patches_data[idx] = patch
             patches_labels[idx] = y[r - margin, col - margin]
+            patches_coords[idx] = [r - margin, col - margin]
             idx += 1
 
     if remove_zeros:
         mask = patches_labels > 0
         patches_data = patches_data[mask]
         patches_labels = patches_labels[mask] - 1
+        patches_coords = patches_coords[mask]
 
-    return patches_data, patches_labels
+    return patches_data, patches_labels, patches_coords
 
 def compute_metrics_numpy(y_true, y_pred, num_classes=16):
     cm = np.zeros((num_classes, num_classes), dtype=np.int64)
@@ -255,7 +258,7 @@ def main():
 
     # 3. Patch Extraction
     t0_patch = time.perf_counter()
-    X_cubes, y_labels = create_image_cubes(pca_data, gt, window_size=13)
+    X_cubes, y_labels, coords_cubes = create_image_cubes(pca_data, gt, window_size=13)
     t_patch_ms = (time.perf_counter() - t0_patch) * 1000.0
     print(f"[*] Spatial Patch Extraction: {t_patch_ms:.2f} ms ({len(X_cubes)} valid patches)")
 
@@ -263,11 +266,13 @@ def main():
         test_indices = np.load(idx_file)
         X_test = X_cubes[test_indices]
         y_test = y_labels[test_indices]
+        coords_test = coords_cubes[test_indices]
         print(f"[*] Loaded exact test partition: {len(X_test)} patches.")
     else:
         split_idx = int(0.10 * len(X_cubes))
         X_test = X_cubes[split_idx:]
         y_test = y_labels[split_idx:]
+        coords_test = coords_cubes[split_idx:]
         print(f"[*] Sliced test partition: {len(X_test)} patches.")
 
     # 4. Initialize VART Runner
@@ -360,6 +365,20 @@ def main():
         scene_total_time_s = round((t_pca_ms + t_patch_ms) / 1000.0 + t_eval, 3)
         scene_total_energy_j = round(scene_total_time_s * power_stats["power_avg_watts"], 3)
         scene_pixels = len(test_patches_dpu)
+
+        # Save actual empirical hardware prediction arrays
+        os.makedirs("results/hsi", exist_ok=True)
+        pred_out_file = "results/hsi/predictions_kv260.npy"
+        np.save(pred_out_file, y_preds)
+        print(f"💾 Saved real DPU predictions to: {pred_out_file}")
+
+        # Construct and save the empirical 2D classification map directly on the board
+        pred_map_2d = np.zeros(gt.shape, dtype=np.int64)
+        for idx_p, (pr, pc) in enumerate(coords_test):
+            pred_map_2d[pr, pc] = y_preds[idx_p] + 1  # 1-indexed classes
+        map_out_file = "results/hsi/classification_map_kv260.npy"
+        np.save(map_out_file, pred_map_2d)
+        print(f"💾 Saved empirical 2D classification map to: {map_out_file}")
 
         print(f"📊 HARDWARE ACCURACY VERIFICATION (DPU INT8):")
         print(f"   Overall Accuracy (OA): {oa:.2f} %")
