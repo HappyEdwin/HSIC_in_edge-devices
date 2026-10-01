@@ -269,6 +269,24 @@ def main():
         print(f"   Total Energy for Scene: {scene_energy_j:.2f} J")
         print("=" * 75)
 
+    def get_process_ram_mb():
+        res = {"rss_mb": 0.0, "peak_rss_mb": 0.0}
+        try:
+            with open("/proc/self/status", "r") as f:
+                for line in f:
+                    if line.startswith("VmHWM:"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            res["peak_rss_mb"] = round(float(parts[1]) / 1024.0, 2)
+                    elif line.startswith("VmRSS:"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            res["rss_mb"] = round(float(parts[1]) / 1024.0, 2)
+        except Exception:
+            pass
+        return res
+
+    ram = get_process_ram_mb()
     results = {
         "platform": "NVIDIA Jetson Orin Nano",
         "model_name": "SS-ResNet",
@@ -284,7 +302,8 @@ def main():
         "energy_mj_per_patch": round(energy_mj, 3),
         "overall_accuracy_oa": round(oa, 2) if args.eval_full else None,
         "average_accuracy_aa": round(aa, 2) if args.eval_full else None,
-        "kappa": round(kappa, 2) if args.eval_full else None
+        "kappa": round(kappa, 2) if args.eval_full else None,
+        "ram_rss_mb": ram["rss_mb"]
     }
 
     with open(args.output_json, "w") as f:
