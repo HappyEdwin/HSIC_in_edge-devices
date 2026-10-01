@@ -30,18 +30,47 @@ class CustomTRTLogger(trt.ILogger):
 
 
 class HSIEntropyCalibrator(trt.IInt8EntropyCalibrator2):
-    def __init__(self, calib_npy="models/vitis_ai/calib_patches_indian.npy", cache_file="models/engines/hsi_calib.cache", batch_size=1):
+    def __init__(self, calib_npy=None, cache_file="models/engines/ss_resnet_indian_calib.cache", batch_size=1):
         super().__init__()
         self.cache_file = cache_file
         self.batch_size = batch_size
-        self.data = np.load(calib_npy).astype(np.float32)
+
+        candidates = [
+            calib_npy,
+            "data/hsi/calib_patches_indian.npy",
+            "models/vitis_ai/calib_patches_indian.npy"
+        ]
+        calib_file = None
+        for c in candidates:
+            if c and os.path.exists(c):
+                calib_file = c
+                break
+
+        if calib_file:
+            print(f"[*] Loading INT8 calibration patches from {calib_file}...")
+            self.data = np.load(calib_file).astype(np.float32)
+        else:
+            print("[*] Generating 256 INT8 calibration patches from raw HSI data...")
+            if os.path.exists("data/hsi/indian_pines_pca30.npy"):
+                pca_data = np.load("data/hsi/indian_pines_pca30.npy")
+            else:
+                raw_data = np.load("data/hsi/raw_indian_pines.npy")
+                W = np.load("data/hsi/pca_transform_weights.npy")
+                mu = np.load("data/hsi/pca_mean.npy")
+                pca_data = np.reshape((np.reshape(raw_data, (-1, 200)) - mu) @ W, (145, 145, 30))
+
+            gt = np.load("data/hsi/indian_pines_gt.npy")
+            from src.inference.benchmark_hsi_jetson import create_image_cubes
+            patches, _ = create_image_cubes(pca_data, gt, window_size=13)
+            # Transpose to (N, 30, 13, 13)
+            self.data = np.transpose(patches[:256], (0, 3, 1, 2)).astype(np.float32)
+
         self.current_idx = 0
         self.num_samples = len(self.data)
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        # Preallocate device buffer for batch
         sample_shape = (self.batch_size, self.data.shape[1], self.data.shape[2], self.data.shape[3])
         self.device_input = torch.zeros(sample_shape, dtype=torch.float32, device=self.device)
-        print(f"[*] HSI INT8 Calibrator initialized with {self.num_samples} patches from {calib_npy}.")
+        print(f"[*] HSI INT8 Calibrator initialized with {self.num_samples} patches.")
 
     def get_batch_size(self):
         return self.batch_size
@@ -113,8 +142,8 @@ def build_hsi_engine(onnx_path: str, engine_path: str, precision: str = "FP16", 
         if builder.platform_has_fast_int8:
             config.set_flag(trt.BuilderFlag.INT8)
             calibrator = HSIEntropyCalibrator(
-                calib_npy="models/vitis_ai/calib_patches_indian.npy",
-                cache_file=f"models/engines/ss_resnet_indian_calib.cache"
+                calib_npy="data/hsi/calib_patches_indian.npy",
+                cache_file="models/engines/ss_resnet_indian_calib.cache"
             )
             config.int8_calibrator = calibrator
             print("⚡ INT8 Precision enabled with HSI Entropy Calibrator.")
